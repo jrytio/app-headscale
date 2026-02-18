@@ -1,0 +1,52 @@
+# Patched by init-headscale on every start
+server_url: https://REPLACE_ME
+listen_addr: 0.0.0.0:443
+metrics_listen_addr: 127.0.0.1:9090
+
+noise:
+  private_key_path: /data/headscale/noise_private.key
+
+# ACME / Let's Encrypt — patched by init-headscale
+tls_letsencrypt_hostname: ""
+tls_letsencrypt_cache_dir: /data/headscale/cache
+tls_letsencrypt_challenge_type: HTTP-01
+tls_letsencrypt_listen: ":80"
+
+database:
+  type: sqlite
+  sqlite:
+    path: /data/headscale/db.sqlite
+
+derp:
+  server:
+    enabled: true
+    region_id: 900
+    region_code: "ha"
+    region_name: "Home Assistant"
+    stun_listen_addr: 0.0.0.0:3478
+    private_key_path: /data/headscale/derp_server_private.key
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  auto_update_enabled: true
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+
+dns:
+  magic_dns: true
+  base_domain: headscale.local
+  override_local_dns: false
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 9.9.9.9
+    split: {}
+  search_domains: []
+  extra_records: []
+
+policy:
+  mode: database
+
+log:
+  level: info

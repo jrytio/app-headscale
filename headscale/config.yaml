@@ -1,0 +1,52 @@
+name: Headscale
+version: 0.6.0
+slug: headscale
+description: Self-hosted Tailscale control server with web UI
+url: https://github.com/josh/app-headscale
+ingress: true
+ingress_port: 0
+panel_icon: mdi:vpn
+panel_title: Headscale
+startup: services
+arch:
+  - aarch64
+  - amd64
+init: false
+host_network: true
+ports:
+  443/tcp: 443
+  80/tcp: 80
+  3478/udp: 3478
+  8080/tcp: null
+ports_description:
+  443/tcp: Headscale server (HTTPS)
+  80/tcp: Let's Encrypt certificate challenge
+  3478/udp: STUN relay
+  8080/tcp: Headplane web UI (not required for Ingress)
+auth_api: true
+hassio_api: true
+map:
+  - ssl
+  - homeassistant_config:ro
+privileged:
+  - NET_ADMIN
+  - NET_RAW
+options:
+  server_url: ""
+  log_level: info
+  acme_email: ""
+  subnet_router:
+    enabled: true
+    routes: []
+    exit_node: false
+schema:
+  server_url: url
+  log_level: list(trace|debug|info|warning|error)
+  acme_email: "email?"
+  subnet_router:
+    enabled: bool
+    routes:
+      - str
+    exit_node: bool
+backup_exclude:
+  - "*/headscale/noise_private.key"

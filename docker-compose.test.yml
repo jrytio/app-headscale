@@ -1,0 +1,39 @@
+# Standalone test environment for the Headscale HA addon.
+# Tests headscale + headplane + tailscale startup without the HA Supervisor.
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up --build
+#
+# Then open http://localhost:8080 for the Headplane UI.
+# Note: ACME/Let's Encrypt won't work locally — headscale will start
+# but TLS cert acquisition will fail. For local testing, we override
+# the config to use self-signed/no TLS.
+
+services:
+  headscale-addon:
+    build:
+      context: ./headscale
+      args:
+        BUILD_ARCH: amd64
+    container_name: headscale-addon-test
+    hostname: headscale-addon-test
+    ports:
+      - "8080:8080"   # Headplane direct access
+      - "443:443"     # Headscale HTTPS
+      - "80:80"       # ACME challenge
+      - "3478:3478/udp" # STUN
+    entrypoint: ["/bin/bash", "/test/entrypoint.sh"]
+    volumes:
+      - headscale-data:/data
+      - ./test/options.json:/data/options.json:ro
+      - ./test/entrypoint.sh:/test/entrypoint.sh:ro
+    environment:
+      # Simulate Supervisor environment variables
+      SUPERVISOR_TOKEN: "test-token-not-real"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+volumes:
+  headscale-data:

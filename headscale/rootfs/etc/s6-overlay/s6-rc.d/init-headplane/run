@@ -1,0 +1,198 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Home Assistant Addon: Headscale
+# Configures Headplane web UI (v0.6.x config file format)
+# ==============================================================================
+readonly HEADPLANE_CONFIG="/etc/headplane/config.yaml"
+readonly COOKIE_SECRET_FILE="/data/headplane/cookie_secret"
+readonly API_KEY_FILE="/data/headplane/api_key"
+readonly AGENT_KEY_FILE="/data/headplane/agent_preauth_key"
+
+bashio::log.info "Configuring Headplane..."
+
+mkdir -p /data/headplane/data /data/headplane/agent /etc/headplane
+
+# Clean up corrupted agent key from previous versions
+if bashio::fs.file_exists "${AGENT_KEY_FILE}"; then
+    stored_key=$(cat "${AGENT_KEY_FILE}")
+    if [[ ! "${stored_key}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        bashio::log.warning "Removing corrupted agent key file..."
+        rm -f "${AGENT_KEY_FILE}"
+    fi
+fi
+
+# Determine headscale URL based on server_url config
+server_url=$(bashio::config 'server_url')
+acme_hostname=$(echo "${server_url}" | sed 's|https://||' | sed 's|http://||' | sed 's|/.*||' | sed 's|:.*||')
+
+if [[ "${server_url}" == https://* ]] && [[ ! "${acme_hostname}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    headscale_port=443
+    headscale_url="https://127.0.0.1:443"
+else
+    headscale_port=80
+    headscale_url="http://127.0.0.1:80"
+fi
+
+# Wait for headscale to be ready
+bashio::log.info "Waiting for Headscale API to be available..."
+bashio::net.wait_for ${headscale_port} 127.0.0.1 300
+
+# Generate or read API key (for user login)
+if ! bashio::fs.file_exists "${API_KEY_FILE}"; then
+    bashio::log.info "Generating Headscale API key for Headplane..."
+    api_key=$(headscale apikeys create --config /data/headscale/config.yaml 2>/dev/null)
+    if bashio::var.has_value "${api_key}"; then
+        printf '%s' "${api_key}" > "${API_KEY_FILE}"
+        bashio::log.info "-----------------------------------------------------------"
+        bashio::log.info "Headplane API Key (use this to log in):"
+        bashio::log.info "${api_key}"
+        bashio::log.info "-----------------------------------------------------------"
+    else
+        bashio::log.warning "Could not generate API key automatically."
+        bashio::log.warning "Generate one manually: headscale apikeys create"
+    fi
+else
+    bashio::log.info "Using stored API key (view at /data/headplane/api_key)."
+fi
+
+api_key=""
+if bashio::fs.file_exists "${API_KEY_FILE}"; then
+    api_key=$(cat "${API_KEY_FILE}")
+fi
+
+# Determine the public headscale URL for client connections
+login_server="${server_url}"
+if [[ "${server_url}" == https://* ]] && [[ "${acme_hostname}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    login_server="http://${acme_hostname}"
+fi
+
+# --- Create headscale users for each HA user account ---
+readonly USER_KEYS_DIR="/data/headplane/user_keys"
+mkdir -p "${USER_KEYS_DIR}"
+
+# Read HA user list (mapped via homeassistant_config:ro)
+ha_users=$(jq -r '.data.users[] | .username' /homeassistant/.storage/auth_provider.homeassistant 2>/dev/null) || true
+
+# Store user list for tailscaled ACL generation
+echo "${ha_users}" > /data/headplane/ha_users.txt
+
+if bashio::var.has_value "${ha_users}"; then
+    bashio::log.info "==========================================================="
+    bashio::log.info "Tailnet connection keys for HA users:"
+    bashio::log.info ""
+
+    while IFS= read -r username; do
+        [ -z "${username}" ] && continue
+
+        # Create headscale user
+        headscale users create "${username}" --config /data/headscale/config.yaml 2>/dev/null || true
+
+        # Generate one-time pre-auth key if none stored
+        key_file="${USER_KEYS_DIR}/${username}"
+        key_is_new=false
+        if ! bashio::fs.file_exists "${key_file}"; then
+            key_is_new=true
+            uid=$(headscale users list --config /data/headscale/config.yaml -o json 2>/dev/null \
+                | jq -r ".[] | select(.name==\"${username}\") | .id") || true
+            if bashio::var.has_value "${uid}"; then
+                user_key=$(headscale preauthkeys create \
+                    --user "${uid}" \
+                    --expiration 8760h \
+                    --config /data/headscale/config.yaml 2>/dev/null) || true
+                if bashio::var.has_value "${user_key}"; then
+                    printf '%s' "${user_key}" > "${key_file}"
+                fi
+            fi
+        fi
+
+        if ! bashio::fs.file_exists "${key_file}"; then
+            bashio::log.warning "  User: ${username} — key generation failed"
+        elif [ "${key_is_new:-false}" = "true" ]; then
+            user_key=$(cat "${key_file}")
+            bashio::log.info "  User: ${username}"
+            bashio::log.info "  tailscale up --login-server ${login_server} --authkey ${user_key}"
+            bashio::log.info ""
+        else
+            bashio::log.info "  User: ${username} — key stored at ${key_file}"
+        fi
+    done <<< "${ha_users}"
+
+    bashio::log.info "==========================================================="
+fi
+
+# ACL policy is set by tailscaled after HA connects and gets its tailnet IP
+
+# Generate or read agent pre-auth key (for headplane agent integration)
+if ! bashio::fs.file_exists "${AGENT_KEY_FILE}"; then
+    bashio::log.info "Creating headplane-agent user..."
+    headscale users create headplane-agent --config /data/headscale/config.yaml 2>/dev/null || true
+    agent_user_id=$(headscale users list --config /data/headscale/config.yaml -o json 2>/dev/null \
+        | jq -r '.[] | select(.name=="headplane-agent") | .id') || true
+    bashio::log.info "Generating pre-auth key for Headplane agent..."
+    agent_key=$(headscale preauthkeys create \
+        --user "${agent_user_id}" \
+        --reusable \
+        --expiration 87600h \
+        --config /data/headscale/config.yaml 2>/dev/null) || true
+    if bashio::var.has_value "${agent_key}"; then
+        printf '%s' "${agent_key}" > "${AGENT_KEY_FILE}"
+        bashio::log.info "Agent pre-auth key generated."
+    else
+        bashio::log.warning "Could not generate agent pre-auth key. Agent disabled."
+    fi
+fi
+
+agent_key=""
+if bashio::fs.file_exists "${AGENT_KEY_FILE}"; then
+    agent_key=$(cat "${AGENT_KEY_FILE}")
+fi
+
+# Generate or read cookie secret (must be exactly 32 characters)
+if ! bashio::fs.file_exists "${COOKIE_SECRET_FILE}"; then
+    printf '%s' "$(openssl rand -base64 24)" > "${COOKIE_SECRET_FILE}"
+    bashio::log.info "Cookie secret generated."
+fi
+cookie_secret=$(cat "${COOKIE_SECRET_FILE}")
+
+# Get the server URL for the public_url setting
+server_url=$(bashio::config 'server_url')
+
+# Write Headplane config file
+cat > "${HEADPLANE_CONFIG}" <<EOF
+server:
+  host: "0.0.0.0"
+  port: 3000
+  cookie_secret: "${cookie_secret}"
+  cookie_secure: false
+  cookie_max_age: 86400
+  data_path: "/data/headplane/data"
+
+headscale:
+  url: "${headscale_url}"
+  public_url: "${server_url}"
+  config_path: "/data/headscale/config.yaml"
+  config_strict: false
+
+integration:
+  proc:
+    enabled: true
+EOF
+
+# Append agent config only if we have a valid key
+if bashio::var.has_value "${agent_key}"; then
+    cat >> "${HEADPLANE_CONFIG}" <<EOF2
+  agent:
+    enabled: true
+    pre_authkey: "${agent_key}"
+    work_dir: "/data/headplane/agent"
+    cache_path: "/data/headplane/agent/cache.json"
+EOF2
+    bashio::log.info "Headplane agent integration enabled."
+fi
+
+# Set NODE_TLS_REJECT_UNAUTHORIZED=0 so headplane can talk to
+# headscale over HTTPS on localhost (cert is for the public domain)
+printf '%s' "0" > /var/run/s6/container_environment/NODE_TLS_REJECT_UNAUTHORIZED
+
+bashio::log.info "Headplane configuration complete."

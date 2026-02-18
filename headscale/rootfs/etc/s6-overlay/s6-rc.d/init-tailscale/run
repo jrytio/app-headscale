@@ -1,0 +1,108 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Home Assistant Addon: Headscale
+# Configures Tailscale: HA node + optional subnet router
+# ==============================================================================
+
+bashio::log.info "Configuring Tailscale..."
+
+readonly HA_AUTH_KEY_FILE="/data/tailscale/ha_auth_key"
+readonly SUBNET_AUTH_KEY_FILE="/data/tailscale/subnet_auth_key"
+
+mkdir -p /data/tailscale/ha /data/tailscale/subnet
+
+# Determine headscale port based on server_url
+server_url=$(bashio::config 'server_url')
+acme_hostname=$(echo "${server_url}" | sed 's|https://||' | sed 's|http://||' | sed 's|/.*||' | sed 's|:.*||')
+
+if [[ "${server_url}" == https://* ]] && [[ ! "${acme_hostname}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    headscale_port=443
+    login_server="${server_url}"
+else
+    headscale_port=80
+    login_server="http://${acme_hostname}"
+fi
+
+# Wait for headscale to be ready
+bashio::net.wait_for ${headscale_port} 127.0.0.1 300
+
+# --- Home Assistant node (always enabled) ---
+bashio::log.info "Setting up Home Assistant tailnet node..."
+headscale users create homeassistant --config /data/headscale/config.yaml 2>/dev/null || true
+ha_user_id=$(headscale users list --config /data/headscale/config.yaml -o json 2>/dev/null \
+    | jq -r '.[] | select(.name=="homeassistant") | .id') || true
+
+if ! bashio::fs.file_exists "${HA_AUTH_KEY_FILE}"; then
+    ha_key=$(headscale preauthkeys create \
+        --user "${ha_user_id}" \
+        --reusable \
+        --expiration 87600h \
+        --config /data/headscale/config.yaml 2>/dev/null) || true
+    if bashio::var.has_value "${ha_key}"; then
+        printf '%s' "${ha_key}" > "${HA_AUTH_KEY_FILE}"
+        bashio::log.info "Home Assistant pre-auth key generated."
+    else
+        bashio::log.warning "Could not generate HA pre-auth key."
+    fi
+else
+    bashio::log.info "Using stored HA pre-auth key."
+fi
+
+# Store login server for tailscaled
+printf '%s' "${login_server}" > /var/run/s6/container_environment/TS_LOGIN_SERVER
+
+# --- Subnet router (optional) ---
+if bashio::config.true 'subnet_router.enabled'; then
+    bashio::log.info "Setting up subnet router..."
+    headscale users create headscale-subnet-router --config /data/headscale/config.yaml 2>/dev/null || true
+    subnet_user_id=$(headscale users list --config /data/headscale/config.yaml -o json 2>/dev/null \
+        | jq -r '.[] | select(.name=="headscale-subnet-router") | .id') || true
+
+    if ! bashio::fs.file_exists "${SUBNET_AUTH_KEY_FILE}"; then
+        subnet_key=$(headscale preauthkeys create \
+            --user "${subnet_user_id}" \
+            --reusable \
+            --expiration 87600h \
+            --config /data/headscale/config.yaml 2>/dev/null) || true
+        if bashio::var.has_value "${subnet_key}"; then
+            printf '%s' "${subnet_key}" > "${SUBNET_AUTH_KEY_FILE}"
+            bashio::log.info "Subnet router pre-auth key generated."
+        else
+            bashio::log.warning "Could not generate subnet router pre-auth key."
+        fi
+    else
+        bashio::log.info "Using stored subnet router pre-auth key."
+    fi
+
+    # Auto-detect LAN routes if none configured
+    routes=()
+    configured_routes=$(bashio::config 'subnet_router.routes')
+    if bashio::var.has_value "${configured_routes}" && [[ "${configured_routes}" != "[]" ]]; then
+        for route in $(bashio::config 'subnet_router.routes'); do
+            routes+=("${route}")
+        done
+        bashio::log.info "Using configured routes: ${routes[*]}"
+    else
+        bashio::log.info "Auto-detecting LAN routes..."
+        for route in $(ip route show | awk '/^[0-9]/ && !/^172\.30\./ {print $1}' | head -1); do
+            routes+=("${route}")
+            bashio::log.info "Detected route: ${route}"
+        done
+    fi
+
+    route_str=$(IFS=,; echo "${routes[*]}")
+    printf '%s' "${route_str}" > /var/run/s6/container_environment/TS_ROUTES
+
+    if bashio::config.true 'subnet_router.exit_node'; then
+        printf '%s' "true" > /var/run/s6/container_environment/TS_EXIT_NODE
+    else
+        printf '%s' "false" > /var/run/s6/container_environment/TS_EXIT_NODE
+    fi
+
+    bashio::log.info "Subnet router routes: ${route_str}"
+else
+    bashio::log.info "Subnet router is disabled."
+fi
+
+bashio::log.info "Tailscale configuration complete."

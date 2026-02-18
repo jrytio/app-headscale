@@ -1,0 +1,12 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Home Assistant Addon: Headscale
+# Runs the Nginx reverse proxy
+# ==============================================================================
+
+# Wait for headplane to become available
+bashio::net.wait_for 3000 127.0.0.1 300
+
+bashio::log.info "Starting Nginx..."
+exec nginx -c /etc/nginx/nginx.conf

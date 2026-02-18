@@ -1,0 +1,10 @@
+{
+  "server_url": "https://localhost",
+  "log_level": "debug",
+  "acme_email": "test@example.com",
+  "subnet_router": {
+    "enabled": false,
+    "routes": [],
+    "exit_node": false
+  }
+}

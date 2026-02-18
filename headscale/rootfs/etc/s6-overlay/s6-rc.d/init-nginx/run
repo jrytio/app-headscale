@@ -1,0 +1,39 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Home Assistant Addon: Headscale
+# Configures Nginx reverse proxy
+# ==============================================================================
+
+bashio::log.info "Configuring Nginx..."
+
+mkdir -p /etc/nginx/servers
+
+# Generate upstream config
+bashio::var.json \
+    port "^3000" \
+    | tempio \
+        -template /etc/nginx/templates/upstream.gtpl \
+        -out /etc/nginx/servers/upstream.conf
+
+# Generate ingress config
+ingress_port=$(bashio::addon.ingress_port)
+bashio::log.info "Ingress port: ${ingress_port}"
+bashio::var.json \
+    port "^${ingress_port}" \
+    | tempio \
+        -template /etc/nginx/templates/ingress.gtpl \
+        -out /etc/nginx/servers/ingress.conf
+
+# Generate direct access config
+if bashio::var.has_value "$(bashio::addon.port 8080)"; then
+    direct_port=$(bashio::addon.port 8080)
+    bashio::log.info "Direct access enabled on port ${direct_port}"
+    bashio::var.json \
+        port "^${direct_port}" \
+        | tempio \
+            -template /etc/nginx/templates/direct.gtpl \
+            -out /etc/nginx/servers/direct.conf
+fi
+
+bashio::log.info "Nginx configuration complete."
