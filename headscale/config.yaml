@@ -37,7 +37,6 @@ options:
   acme_email: ""
   subnet_router:
     enabled: true
-    routes: []
     exit_node: false
 schema:
   server_url: url
@@ -45,8 +44,6 @@ schema:
   acme_email: "email?"
   subnet_router:
     enabled: bool
-    routes:
-      - str
     exit_node: bool
 backup_exclude:
   - "*/headscale/noise_private.key"

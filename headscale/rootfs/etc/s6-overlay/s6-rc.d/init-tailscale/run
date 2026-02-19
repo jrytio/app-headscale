@@ -75,21 +75,13 @@ if bashio::config.true 'subnet_router.enabled'; then
         bashio::log.info "Using stored subnet router pre-auth key."
     fi
 
-    # Auto-detect LAN routes if none configured
+    # Auto-detect LAN routes
     routes=()
-    configured_routes=$(bashio::config 'subnet_router.routes')
-    if bashio::var.has_value "${configured_routes}" && [[ "${configured_routes}" != "[]" ]]; then
-        for route in $(bashio::config 'subnet_router.routes'); do
-            routes+=("${route}")
-        done
-        bashio::log.info "Using configured routes: ${routes[*]}"
-    else
-        bashio::log.info "Auto-detecting LAN routes..."
-        for route in $(ip route show | awk '/^[0-9]/ && !/^172\.30\./ {print $1}' | head -1); do
-            routes+=("${route}")
-            bashio::log.info "Detected route: ${route}"
-        done
-    fi
+    bashio::log.info "Auto-detecting LAN routes..."
+    for route in $(ip route show | awk '/^[0-9]/ && !/^172\.30\./ {print $1}' | head -1); do
+        routes+=("${route}")
+        bashio::log.info "Detected route: ${route}"
+    done
 
     route_str=$(IFS=,; echo "${routes[*]}")
     printf '%s' "${route_str}" > /var/run/s6/container_environment/TS_ROUTES
