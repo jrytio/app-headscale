@@ -30,8 +30,6 @@ if ! bashio::fs.file_exists "${COOKIE_SECRET_FILE}"; then
 fi
 cookie_secret=$(cat "${COOKIE_SECRET_FILE}")
 
-server_url=$(bashio::config 'server_url')
-
 cat > "${HEADPLANE_CONFIG}" <<EOF
 server:
   host: "127.0.0.1"
@@ -65,6 +63,7 @@ EOF
 chown headplane:headplane "${HEADPLANE_CONFIG}" /data/headplane -R
 chmod 0400 "${HEADPLANE_CONFIG}"
 chmod 0600 "${API_KEY_FILE}" 2>/dev/null || true
+chmod 0600 "${COOKIE_SECRET_FILE}" 2>/dev/null || true
 
 # headplane must read the headscale config for config_path integration
 chmod g+r /data/headscale/config.yaml 2>/dev/null || true
