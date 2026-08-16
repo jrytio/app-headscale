@@ -18,6 +18,10 @@ jobs:
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
       - name: Run e2e suite
         run: ./test/e2e.sh
-      - name: Supervisor logs on failure
+      - name: Diagnostics note
         if: failure()
-        run: docker exec hassio-e2e cat /tmp/supervisor.log | tail -200 || true
+        run: |
+          echo "test/e2e.sh dumps supervisor log tail, addon logs, and 'docker ps -a' inline" \
+               "BEFORE tearing the supervisor container down (search the 'Run e2e suite' step" \
+               "log above for 'FAILURE DIAGNOSTICS') — the supervisor container itself does not" \
+               "survive past that step, so there is nothing left here to fetch."

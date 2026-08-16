@@ -65,14 +65,48 @@
 #    trip is infeasible either way (see the tailscale point above), this
 #    script does not fight for that mount and instead verifies the
 #    addon's own serve configuration + headscale node data.
-#  * A subnet route is never actually auto-approved in this harness:
-#    Supervisor's own `/network/info` reports zero host `interfaces[]`
-#    inside the devcontainer (no NetworkManager-managed physical interface),
-#    so the addon's auto-detect logic correctly finds nothing to advertise
-#    and logs a warning — this is an environment limitation reachable from
-#    ubuntu-latest CI runners too (same nested-container networking), not a
-#    addon bug. Verified instead: the subnet-router node still joins
-#    correctly with its tag, and the ACL's group:subnet-access stays empty.
+#  * A subnet route is never actually auto-approved by the addon's own logic
+#    in this harness: Supervisor's own `/network/info` reports zero host
+#    `interfaces[]` inside the devcontainer (no NetworkManager-managed
+#    physical interface), so the addon's auto-detect finds nothing to
+#    advertise and logs a warning — this is an environment limitation
+#    reachable from ubuntu-latest CI runners too (same nested-container
+#    networking), not an addon bug. The addon's own auto-detect join/tag path
+#    is verified as before (node joins with its tag, group:subnet-access
+#    stays empty) — but the *approval machinery itself* (advertise -> approve
+#    -> approved_routes) is also exercised directly: manually re-running
+#    `tailscale up --advertise-routes=...` against the subnet-router
+#    service's own socket, then `headscale nodes approve-routes`, produces a
+#    populated `.approved_routes` array on that node (confirmed live; field
+#    name verified against a real `nodes list -o json` response).
+#  * `/ingress/panels`'s real response shape (confirmed live) is
+#    `{"result":"ok","data":{"panels":{"<slug>":{"title":...,"icon":...,
+#    "admin":bool,"enable":bool}}}}` — `panels` is an object keyed by addon
+#    slug, not a list. Assert with `.data.panels | has("<slug>")`.
+#  * `headscale policy get`'s JSON has `.acls[]` entries shaped
+#    `{"action":...,"src":[...],"dst":[...]}` on stdout (its DBG log lines go
+#    to stderr, so piping stdout straight into `jq` is safe). Assert specific
+#    grants with `select(.src == [...] and .dst == [...])`, not a substring
+#    grep — a substring match can't tell a real grant from an unrelated rule
+#    that merely mentions the same tag.
+#  * A genuine SOCKS5 data-plane round trip through the tailnet is possible,
+#    but only because this addon's "homeassistant" tailnet node (the
+#    ts-ha-proxy service, running *inside the addon container itself*) does
+#    `tailscale serve --tcp=$HA_PORT tcp://homeassistant:$HA_PORT` — and
+#    Supervisor's own DNS resolves the bare hostname "homeassistant" to the
+#    "hassio" bridge network's gateway address (172.30.32.1), which is where
+#    real HA Core would listen under its documented `network_mode: host`.
+#    Since HA Core never boots here (see the point above), nothing answers
+#    there by default — so a trivial HTTP stub is bound to that same gateway
+#    address, but ONLY from inside the Supervisor devcontainer (which owns
+#    that interface — confirmed via `ip addr show`), standing in for "real
+#    HA Core" so the addon's own real tailscale-serve forwarding chain has
+#    something live to reach. Everything upstream of that stub (tailnet
+#    routing, ACL-gated netmap visibility, tailscale serve itself) is fully
+#    real. The tailscale/tailscale image only ships busybox wget, which has
+#    no SOCKS5 support at all (checked: no proxy flag beyond a plain
+#    HTTP_PROXY passthrough) — `apk add curl` inside the client container
+#    (confirmed to work in this environment) is required.
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
@@ -114,12 +148,43 @@ ha_ok() {
   return 1
 }
 
+# dump_diagnostics — printed to stdout (so it lands in the CI run log, which
+# is the only place a CI runner's ephemeral disk survives to) BEFORE cleanup
+# tears the supervisor container and its volumes down. Every field it reads
+# is defaulted so it can never itself crash under `set -u`, however early a
+# failure happens.
+# shellcheck disable=SC2329 # invoked indirectly via cleanup(), itself invoked via `trap ... EXIT`
+dump_diagnostics() {
+  echo "===================================================================="
+  echo "FAILURE DIAGNOSTICS (captured before teardown)"
+  echo "===================================================================="
+  if docker inspect "$SUP" >/dev/null 2>&1; then
+    echo "--- supervisor log: tail -n 200 /tmp/supervisor.log ---"
+    sup tail -n 200 /tmp/supervisor.log 2>&1 || echo "(could not read /tmp/supervisor.log)"
+    echo "--- ha ${APPS:-apps} logs local_headscale ---"
+    ha "${APPS:-apps}" logs local_headscale 2>&1 || echo "(ha logs failed)"
+    if [ -n "${ADDON_CONTAINER:-}" ]; then
+      echo "--- docker logs ${ADDON_CONTAINER} (inside supervisor) ---"
+      sup docker logs --tail 200 "$ADDON_CONTAINER" 2>&1 || echo "(docker logs failed)"
+    fi
+    echo "--- docker ps -a (inside supervisor) ---"
+    sup docker ps -a 2>&1 || echo "(docker ps -a failed)"
+  else
+    echo "(supervisor container $SUP does not exist — nothing to dump)"
+  fi
+  echo "===================================================================="
+}
+
 # shellcheck disable=SC2329 # invoked indirectly via `trap ... EXIT` below
 cleanup() {
+  local exit_code="${1:-0}"
+  if [ "$FAIL" -ne 0 ] || [ "$exit_code" -ne 0 ]; then
+    dump_diagnostics
+  fi
   docker rm -f "$SUP" >/dev/null 2>&1 || true
   docker volume rm -f "$DIND_VOL" "$CONTAINERD_VOL" >/dev/null 2>&1 || true
 }
-trap cleanup EXIT
+trap 'cleanup $?' EXIT
 
 # --- 1. Boot Supervisor ---
 # NOTE: do NOT override the container command (no "sleep infinity"). The
@@ -170,7 +235,12 @@ ha_ok "addon install" "$APPS" install local_headscale
 # "supervisor" hostname only resolves from containers on the nested "hassio"
 # bridge network, not from this outer container's shell, and the `ha` CLI has
 # no "options" subcommand to set config with, so we POST directly.
-SUP_TOKEN=$(sup docker exec hassio_cli printenv SUPERVISOR_TOKEN)
+SUP_TOKEN=""
+for _ in 1 2 3 4 5; do
+  SUP_TOKEN=$(sup docker exec hassio_cli printenv SUPERVISOR_TOKEN 2>/dev/null) && [ -n "$SUP_TOKEN" ] && break
+  sleep 3
+done
+[ -n "$SUP_TOKEN" ] || { bad "could not read SUPERVISOR_TOKEN from hassio_cli after retries"; exit 1; }
 SUP_IP=$(sup docker inspect hassio_supervisor -f '{{(index .NetworkSettings.Networks "hassio").IPAddress}}')
 api() { # api METHOD PATH [BODY_FILE_IN_CONTAINER]
   local method="$1" path="$2" bodyfile="${3:-}"
@@ -224,9 +294,14 @@ check "ingress denies non-supervisor" \
 ok "ingress port resolved (${ING_PORT})"
 # Full authenticated-ingress fetch requires an HA user session; the supervisor
 # proxies ingress itself — verify via the supervisor's own ingress panel list.
+# Confirmed live response shape: {"result":"ok","data":{"panels":{"<slug>":
+# {"title":...,"icon":...,"admin":bool,"enable":bool}}}} — panels is an
+# object keyed by addon slug, so assert THIS addon's own panel is actually
+# present rather than just that the endpoint answered "ok" (which it would
+# for an empty panel list too).
 # shellcheck disable=SC2329 # invoked indirectly via check() below
-ingress_via_supervisor() { api GET /ingress/panels | jq -e '.result == "ok"' >/dev/null; }
-check "ingress serves via supervisor" ingress_via_supervisor
+ingress_via_supervisor() { api GET /ingress/panels | jq -e '.data.panels | has("local_headscale")' >/dev/null; }
+check "ingress serves via supervisor (local_headscale panel present)" ingress_via_supervisor
 
 # --- 4. Client join + ACL enforcement ---
 # NOTE (see header): tailscale's userspace-networking mode does not route raw
@@ -238,8 +313,11 @@ check "ingress serves via supervisor" ingress_via_supervisor
 # the control-plane boundary than a data-plane round trip would be anyway.
 USER_ID=$(hsx users list -o json | jq -r '.[] | select(.name=="e2etest") | .id')
 AUTHKEY=$(hsx preauthkeys create --user "$USER_ID")
+# --socks5-server enables a real data-plane round trip below (see "SOCKS5
+# data-path ACL test"), in addition to the control-plane peer-visibility
+# checks that follow immediately.
 sup docker run -d --name ts-client --network hassio tailscale/tailscale:v1.102.2 \
-  tailscaled --tun=userspace-networking --socket=/tmp/ts.sock
+  tailscaled --tun=userspace-networking --socket=/tmp/ts.sock --socks5-server=localhost:1055
 sleep 5
 check "client joins tailnet" \
   sup docker exec ts-client tailscale --socket=/tmp/ts.sock up \
@@ -252,8 +330,61 @@ check "client does NOT see subnet-router peer (no ACL grant)" \
 check "client does NOT see headplane-agent peer (no ACL grant)" \
   sup docker exec ts-client sh -c "! tailscale --socket=/tmp/ts.sock status | grep -q headplane-agent"
 
+# --- SOCKS5 data-path ACL test (real HTTP round trip through the tailnet) ---
+# The peer-visibility checks above prove the control plane (headscale only
+# tells a node about peers its ACL grants it). This proves the DATA plane:
+# a real byte stream, carried over the tailnet, through the addon's own
+# ts-ha-proxy `tailscale serve` forward, arriving as a real HTTP response.
+#
+# "homeassistant" resolves (via Supervisor's DNS) to the "hassio" bridge
+# gateway address, matching where real HA Core would listen under its
+# documented network_mode:host — but HA Core never boots in this harness (see
+# header), so nothing answers there by default. Stand in for it with a
+# trivial HTTP stub bound to that same gateway address, from inside the
+# Supervisor devcontainer itself (which owns that interface) — everything
+# upstream of the stub (tailnet transport, ACL-gated netmap, tailscale serve)
+# is exercised for real; only the final "is real HA Core listening" leg is
+# substituted, exactly as documented in the header.
+HA_PORT=$(sup docker exec "$ADDON_CONTAINER" cat /var/run/s6/container_environment/HA_PORT 2>/dev/null)
+[ -n "$HA_PORT" ] || HA_PORT=8123
+sup bash -c "printf 'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok' > /tmp/ha_stub_response"
+sup bash -c "nohup socat -T30 TCP-LISTEN:${HA_PORT},bind=172.30.32.1,reuseaddr,fork SYSTEM:'cat /tmp/ha_stub_response' >/tmp/ha_stub.log 2>&1 &"
+sleep 1
+# busybox wget (the only HTTP client in tailscale/tailscale) has no SOCKS5
+# support at all — install curl.
+sup docker exec ts-client apk add --no-cache curl >/dev/null 2>&1
+HOMEASSISTANT_TS_IP=$(hsx nodes list -o json | jq -r '.[] | select(.name=="homeassistant") | .ip_addresses[0]')
+SUBNET_ROUTER_TS_IP=$(hsx nodes list -o json | jq -r '.[] | select(.name=="subnet-router") | .ip_addresses[0]')
+# ts-ha-proxy joins the tailnet and THEN separately calls `tailscale serve`
+# as two sequential steps in its own boot script — the node can register in
+# headscale (and so become visible in `tailscale status`) a moment before
+# that second `tailscale serve --bg` call actually lands. Retry briefly to
+# absorb that real, observed startup race rather than declaring the data
+# path broken on a boot-order timing artifact.
+# shellcheck disable=SC2329 # invoked indirectly via check() below
+socks5_reaches_granted_peer() {
+  for _ in 1 2 3 4 5 6; do
+    sup docker exec ts-client curl -sS --proxy socks5h://localhost:1055 --max-time 15 -o /dev/null \
+      "http://${HOMEASSISTANT_TS_IP}:${HA_PORT}/" && return 0
+    sleep 3
+  done
+  return 1
+}
+check "SOCKS5 data path reaches ACL-granted homeassistant peer (real HTTP response)" socks5_reaches_granted_peer
+# Negative control: same fetch against an ACL-denied peer must fail — either
+# at the SOCKS5 layer (tailscaled won't even open a stream to a peer it
+# doesn't have in its netmap, the observed behavior — see header) or as a
+# network-level curl error; either way, curl must NOT exit 0.
+# shellcheck disable=SC2329 # invoked indirectly via check() below
+socks5_denied_to_ungranted_peer() {
+  ! sup docker exec ts-client curl -sS --proxy socks5h://localhost:1055 --max-time 15 -o /dev/null \
+    "http://${SUBNET_ROUTER_TS_IP}:${HA_PORT}/"
+}
+check "SOCKS5 data path denied to ACL-ungranted subnet-router peer (negative control)" socks5_denied_to_ungranted_peer
+sup bash -c 'pkill socat' >/dev/null 2>&1 || true
+
 # Subnet router: verify it still joins correctly even though no route is ever
-# auto-approved in this harness (Supervisor's own /network/info reports zero
+# auto-*detected* in this harness (Supervisor's own /network/info reports zero
 # host interfaces inside any nested-container devcontainer, so the addon's
 # auto-detect logic — correctly — has nothing to advertise). The meaningful,
 # environment-independent assertions are: the node joins with its tag, and
@@ -265,12 +396,43 @@ check "subnet-router node joined with tag" subnet_router_tagged
 subnet_access_group_empty() { hsx policy get | jq -e '(.groups["group:subnet-access"] // []) | length == 0' >/dev/null; }
 check "group:subnet-access stays empty (no route reachable even if one were approved)" subnet_access_group_empty
 
+# --- Subnet router route-approval machinery (advertise -> approve -> approved_routes) ---
+# The check above only proves auto-*detection* finds nothing to advertise in
+# this harness (an environment limitation, not testable here). The route
+# *approval* machinery itself — the part headscale and this addon actually
+# implement — is independent of auto-detection and IS testable: manually
+# re-run `tailscale up` against the subnet-router service's own socket with
+# the same flags ts-subnet-router/run uses plus --advertise-routes, then
+# approve it exactly as the addon's own init logic does.
+TEST_ROUTE="203.0.113.0/24"
+HS_LOCAL_URL=$(sup docker exec "$ADDON_CONTAINER" cat /var/run/s6/container_environment/HS_LOCAL_URL 2>/dev/null)
+[ -n "$HS_LOCAL_URL" ] || HS_LOCAL_URL="http://127.0.0.1:8081"
+check "subnet-router advertises test route" \
+  sup docker exec "$ADDON_CONTAINER" s6-setuidgid tailscale /usr/local/bin/tailscale \
+    --socket=/var/run/tailscale/subnet-router.sock up \
+    --login-server "$HS_LOCAL_URL" --hostname subnet-router --accept-dns=false --accept-routes=false \
+    --advertise-routes="$TEST_ROUTE"
+SUBNET_ROUTER_NODE_ID=$(hsx nodes list -o json | jq -r '.[] | select(.name=="subnet-router") | .id')
+check "headscale approves advertised route" \
+  hsx nodes approve-routes -i "$SUBNET_ROUTER_NODE_ID" -r "$TEST_ROUTE"
+# shellcheck disable=SC2329 # invoked indirectly via check() below
+route_approved() {
+  hsx nodes list -o json | jq -e --arg r "$TEST_ROUTE" \
+    '.[] | select(.name=="subnet-router") | (.approved_routes // []) | index($r)' >/dev/null
+}
+check "advertised route appears in approved_routes" route_approved
+
 sup docker rm -f ts-client >/dev/null 2>&1 || true
 
 # --- 5. Credential hygiene ---
-API_KEY=$(sup docker exec "$ADDON_CONTAINER" cat /data/headplane/api_key)
+API_KEY=$(sup docker exec "$ADDON_CONTAINER" cat /data/headplane/api_key 2>/dev/null)
+# A distinct check for "could the key file even be read" — without this, a
+# failure to read the file (empty API_KEY) would surface only as a confusing
+# pass/fail on the unrelated "not in logs" check below (an empty search
+# pattern trivially matches, or fails to, depending on grep's mood).
+check "headplane api_key file readable" test -n "$API_KEY"
 # shellcheck disable=SC2329 # invoked indirectly via check() below
-api_key_not_logged() { ! ha "$APPS" logs local_headscale 2>/dev/null | grep -qF "$API_KEY"; }
+api_key_not_logged() { [ -n "$API_KEY" ] && ! ha "$APPS" logs local_headscale 2>/dev/null | grep -qF "$API_KEY"; }
 check "api key not in addon logs" api_key_not_logged
 
 # --- 6. Lifecycle: restart preserves identity ---
@@ -286,9 +448,16 @@ check "addon healthy after restart" addon_healthy
 NODE_COUNT_AFTER=$(hsx nodes list -o json | jq length)
 check "no re-provisioning after restart (node count stable)" \
   test "$NODE_COUNT_BEFORE" = "$NODE_COUNT_AFTER"
+# A substring grep for "tag:homeassistant" would also match the tagOwners
+# declaration, an unrelated autogroup:member rule, or a future rule that
+# merely mentions the tag without granting group:users anything — assert the
+# specific seeded grant rule survives instead: an acls[] entry with
+# src == ["group:users"] and dst == ["tag:homeassistant:*"].
 # shellcheck disable=SC2329 # invoked indirectly via check() below
-policy_has_homeassistant_tag() { hsx policy get | grep -q tag:homeassistant; }
-check "policy survives restart" policy_has_homeassistant_tag
+policy_grants_users_to_homeassistant() {
+  hsx policy get | jq -e '.acls[] | select(.src == ["group:users"] and .dst == ["tag:homeassistant:*"])' >/dev/null
+}
+check "policy survives restart (group:users -> tag:homeassistant:* grant intact)" policy_grants_users_to_homeassistant
 
 # --- 7. Backup / restore ---
 supbash 'cat > /tmp/backup.json <<EOF
