@@ -1,0 +1,50 @@
+---
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Never react to our own bump commit
+    if: "!startsWith(github.event.head_commit.message, 'release:')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+      - name: Determine version
+        id: ver
+        run: |
+          current=$(yq e '.version' headscale/config.yaml)
+          last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          if [ "v${current}" = "${last_tag}" ]; then
+            # not manually bumped -> auto patch bump
+            next=$(echo "${current}" | awk -F. '{print $1"."$2"."$3+1}')
+            yq e -i ".version = \"${next}\"" headscale/config.yaml
+            title=$(git log -1 --pretty=%s)
+            printf '## %s\n\n- %s\n\n%s\n' "${next}" "${title}" "$(cat headscale/CHANGELOG.md)" > headscale/CHANGELOG.md
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add headscale/config.yaml headscale/CHANGELOG.md
+            git commit -m "release: v${next}"
+            git push
+          else
+            next="${current}"
+          fi
+          echo "version=${next}" >> "$GITHUB_OUTPUT"
+      - name: Tag and publish release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          v=${{ steps.ver.outputs.version }}
+          git tag "v${v}" || true
+          git push origin "v${v}" || true
+          gh release create "v${v}" --title "v${v}" \
+            --notes "$(awk '/^## /{n++} n==1' headscale/CHANGELOG.md)" || true
