@@ -26,4 +26,13 @@ assert "headscale runs as non-root" \
 assert "no NODE_TLS_REJECT_UNAUTHORIZED in container env" \
   bash -c "! docker exec $C test -e /var/run/s6/container_environment/NODE_TLS_REJECT_UNAUTHORIZED"
 
+assert "policy: seeded with tag:homeassistant rule" \
+  bash -c "docker exec $C s6-setuidgid headscale headscale policy get --config /data/headscale/config.yaml | grep -q 'tag:homeassistant'"
+assert "policy: no allow-all member rule" \
+  bash -c "! docker exec $C s6-setuidgid headscale headscale policy get --config /data/headscale/config.yaml | jq -e '.acls[] | select(.src==[\"autogroup:member\"] and .dst==[\"*:*\"])'"
+assert "users: e2etest + addon + headplane-agent exist" \
+  bash -c "docker exec $C s6-setuidgid headscale headscale users list -o json --config /data/headscale/config.yaml | jq -r '.[].name' | grep -qx 'e2etest'"
+assert "policy: group:users contains e2etest@" \
+  bash -c "docker exec $C s6-setuidgid headscale headscale policy get --config /data/headscale/config.yaml | jq -e '.groups[\"group:users\"] | index(\"e2etest@\")'"
+
 exit $FAIL

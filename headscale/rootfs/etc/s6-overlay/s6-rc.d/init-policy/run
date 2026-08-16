@@ -1,0 +1,112 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# Creates headscale users and applies the access policy BEFORE any node joins.
+# First-run policy failure is FATAL: never run on headscale's allow-all default.
+readonly SEED_MARKER="/data/headscale/.policy_seeded"
+
+hs() { s6-setuidgid headscale /usr/local/bin/headscale --config /data/headscale/config.yaml "$@"; }
+
+# Wait for headscale API (mode-dependent local port)
+if [ "${HS_MODE}" = "tls" ]; then wait_port=8443; else wait_port=8081; fi
+bashio::net.wait_for "${wait_port}" 127.0.0.1 300
+
+# --- Users: option users + service users (idempotent) ---
+existing=$(hs users list -o json 2>/dev/null | jq -r '.[].name') || existing=""
+create_user() {
+    if ! echo "${existing}" | grep -qx "$1"; then
+        bashio::log.info "Creating headscale user: $1"
+        hs users create "$1" >/dev/null 2>&1 || true
+    fi
+}
+create_user "addon"
+create_user "headplane-agent"
+option_users=$(bashio::config 'users') || option_users=""
+for u in ${option_users}; do
+    [ "${u}" = "null" ] && continue
+    create_user "${u}"
+done
+
+# --- Build group:users JSON from options ---
+users_json=$(bashio::config 'users' | jq -Rs '[split("\n")[] | select(length>0 and . != "null") | . + "@"]')
+
+# --- Detected routes (only matter if subnet router enabled) ---
+cidr_network() { # 192.168.77.10/24 -> 192.168.77.0/24 (IPv4 only, pure bash)
+    local ip="${1%/*}" bits="${1#*/}" IFS=. o1 o2 o3 o4 m
+    read -r o1 o2 o3 o4 <<< "${ip}"
+    m=$(( 0xFFFFFFFF << (32 - bits) & 0xFFFFFFFF ))
+    local n=$(( ((o1<<24 | o2<<16 | o3<<8 | o4) & m) ))
+    echo "$(( (n>>24)&255 )).$(( (n>>16)&255 )).$(( (n>>8)&255 )).$(( n&255 ))/${bits}"
+}
+routes=""
+if bashio::config.true 'subnet_router.enabled'; then
+    routes=$(bashio::network "network_info" \
+        '.interfaces[] | select(.primary==true) | .ipv4.address[0]' 2>/dev/null) || true
+    if bashio::var.has_value "${routes}" && [ "${routes}" != "null" ]; then
+        routes=$(cidr_network "${routes}")
+    else
+        routes=""
+        bashio::log.warning "Subnet router enabled but no route detected (Supervisor API unavailable?)"
+    fi
+fi
+printf '%s' "${routes}" > /var/run/s6/container_environment/TS_ROUTES
+
+if ! bashio::fs.file_exists "${SEED_MARKER}"; then
+    bashio::log.info "Seeding access policy (fail-closed)..."
+    acl_tmp="/tmp/seed_policy.hujson"
+    subnet_acl=""
+    if bashio::var.has_value "${routes}"; then
+        subnet_acl=",
+        {\"action\": \"accept\", \"src\": [\"group:subnet-access\"], \"dst\": [\"${routes}:*\"]}"
+    fi
+    cat > "${acl_tmp}" <<ACLEOF
+{
+    "tagOwners": {
+        "tag:homeassistant": [],
+        "tag:subnet-router": []
+    },
+    "groups": {
+        "group:admins": [],
+        "group:users": ${users_json},
+        "group:subnet-access": []
+    },
+    "acls": [
+        {"action": "accept", "src": ["group:admins"], "dst": ["*:*"]},
+        {"action": "accept", "src": ["group:users"], "dst": ["tag:homeassistant:*"]},
+        {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:homeassistant:${HA_PORT}"]}${subnet_acl}
+    ]
+}
+ACLEOF
+    if hs policy set -f "${acl_tmp}"; then
+        printf '%s' "1" > "${SEED_MARKER}"
+        bashio::log.info "Access policy seeded."
+    else
+        bashio::log.fatal "Could not apply the seed access policy."
+        bashio::log.fatal "Refusing to start with headscale's allow-all default."
+        bashio::exit.nok
+    fi
+else
+    # Surgical add-only merges; failures are loud but non-fatal (policy exists).
+    current=$(hs policy get 2>/dev/null)
+    if bashio::var.has_value "${current}"; then
+        merged=$(echo "${current}" | jq --argjson add "${users_json}" \
+            '.groups["group:users"] = ((.groups["group:users"] // []) + $add | unique)')
+        if bashio::var.has_value "${routes}" \
+            && ! echo "${current}" | jq -e '.acls[] | select(.src==["group:subnet-access"])' >/dev/null; then
+            merged=$(echo "${merged}" | jq --arg dst "${routes}:*" \
+                '.acls += [{"action":"accept","src":["group:subnet-access"],"dst":[$dst]}]')
+        fi
+        if [ "${merged}" != "${current}" ]; then
+            merge_tmp="/tmp/merged_policy.json"
+            echo "${merged}" > "${merge_tmp}"
+            if hs policy set -f "${merge_tmp}"; then
+                bashio::log.info "Policy updated (add-only merge)."
+            else
+                bashio::log.error "Policy merge failed — existing policy left unchanged."
+            fi
+        fi
+    else
+        bashio::log.error "Could not read existing policy for merge; skipping."
+    fi
+fi
+
+bashio::log.info "Policy configuration complete."
