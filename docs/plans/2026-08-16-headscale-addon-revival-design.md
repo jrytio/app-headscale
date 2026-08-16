@@ -49,8 +49,8 @@ Headscale does not support Tailnet Lock (upstream issue #1307, open since 2023).
 | Headscale | 0.29.3 | Auth-path hardening; strict no-skip minor upgrade path makes one-minor bumps the safe cadence |
 | Networking | Bridge (drop `host_network`) | RCE lands in an isolated netns: NAT-only outbound, no ARP/sniffing, no host loopback/iptables |
 | Privileges | None (drop NET_ADMIN, NET_RAW, TUN) | Subnet router runs userspace-networking; nothing else needs capabilities |
-| Subnet router | Single userspace tailscaled | Replaces the two-instance (TUN + userspace) design |
-| HA reachability | Subnet route to HA's LAN IP + MagicDNS name | Replaces the dedicated host TUN node |
+| HA reachability | `tailscale serve` TCP proxy on an always-on tagged node named `homeassistant` | HA reachable at its own MagicDNS name with no subnet router, no accept-routes, no LAN-IP/DHCP dependency; HA's port discovered from the Supervisor core API (no hardcoded 8123 — modern HA installs use standard HTTPS) |
+| Subnet router | Separate, optional userspace tailscaled node — **default disabled** | LAN exposure is strictly opt-in; decoupled from HA access entirely |
 | User provisioning | `users:` addon option, provisioned at startup | Replaces reading HA's `.storage`; `homeassistant_config` map removed |
 | Dependency updates | All deps as Dockerfile `FROM` stages + Dependabot | Dependabot docker ecosystem sees every version; CVE fixes arrive as PRs |
 | Releases | Auto version-bump + GHCR image publish on merge to main | Dependabot merges become user-visible HA updates without manual steps |
@@ -95,7 +95,7 @@ options:
   acme_email: ""
   users: []
   subnet_router:
-    enabled: true
+    enabled: false          # LAN exposure is opt-in (was true; breaking-change note in CHANGELOG)
     exit_node: false
 schema:
   users:
@@ -120,13 +120,16 @@ init-headscale (oneshot: config patch, /etc/hosts pin)
   └─→ headscale (longrun, user: headscale)
         ├─→ init-policy (oneshot: create users, then seed/merge ACL — FAIL-CLOSED on first run)
         │     ├─→ init-headplane (oneshot) → headplane (longrun, user: headplane)
-        │     ├─→ init-tailscale (oneshot) → tailscaled (longrun, user: tailscale, userspace networking)
+        │     ├─→ init-ha-proxy (oneshot) → ts-ha-proxy (longrun, user: tailscale, userspace, always on)
+        │     ├─→ init-subnet-router (oneshot) → ts-subnet-router (longrun, user: tailscale, userspace, optional)
         │     └─→ init-nginx (oneshot) → nginx (longrun, user: nginx)
 ```
 
 Changes from v0.6.0:
-- New `init-policy` oneshot: creates headscale users from the `users` option first (headscale rejects a policy whose groups reference nonexistent users — creation must precede the seed), then applies the ACL **before any node can join** (it no longer waits for a tailnet IP). On **first run**, a policy-apply failure is fatal (`bashio::exit.nok` → container halts): the addon must never run on headscale's allow-all default. On subsequent runs the policy exists in the DB, so failures of the surgical updates (below) log loudly but don't kill the addon.
-- `tailscaled` is one instance, `--tun=userspace-networking`, no TUN device, no capabilities. The separate "homeassistant" TUN node is gone.
+- New `init-policy` oneshot: creates headscale users from the `users` option first (headscale rejects a policy whose groups reference nonexistent users — creation must precede the seed), then applies the ACL **before any node can join** (it no longer waits for a tailnet IP; tag-based rules need no IPs). On **first run**, a policy-apply failure is fatal (`bashio::exit.nok` → container halts): the addon must never run on headscale's allow-all default. On subsequent runs the policy exists in the DB, so failures of the surgical updates (below) log loudly but don't kill the addon.
+- **`ts-ha-proxy`** (always on): userspace tailscaled, node name `homeassistant`, joined with tag `tag:homeassistant`. Runs `tailscale serve` in TCP-forward mode proxying HA's actual port — discovered via the Supervisor core API (`bashio::core.port`; **not** hardcoded 8123, since modern HA installs serve standard HTTPS) — to the internal `homeassistant` hostname on the hassio network. HA terminates its own TLS exactly as it does on the LAN; clients reach `homeassistant.<base_domain>` regardless of subnet routing, accept-routes, or MagicDNS extra records. *(Implementation-plan step: verify `tailscale serve --tcp` against headscale 0.29; fallback if it misbehaves is the subnet-route + `dns.extra_records` design this replaces.)*
+- **`ts-subnet-router`** (optional, **default disabled** — LAN exposure is opt-in): userspace tailscaled, tag `tag:subnet-router`, advertises Supervisor-API-detected (or future user-configured) routes. Completely decoupled from HA access.
+- Both tailscale nodes: `--tun=userspace-networking`, no TUN device, no capabilities.
 - Every longrun runs under a dedicated non-root user via `s6-setuidgid`; `/data` subdirectories are chowned per service. Only s6 init itself is root.
 
 ### Networking and TLS
@@ -135,19 +138,26 @@ Changes from v0.6.0:
 - **Internal TLS**: `init-headscale` appends `127.0.0.1 <acme_hostname>` to `/etc/hosts`. Headplane and the tailscale client dial `https://<acme_hostname>:8443` — the real ACME cert validates against the real hostname. `NODE_TLS_REJECT_UNAUTHORIZED` is deleted. The same pin makes in-container clients immune to hairpin-NAT failures. (HTTP/IP mode keeps the existing fallback behavior, minus the hosts pin.)
 - **DNS**: MagicDNS `base_domain` default changes from `headscale.local` (mDNS collision) to `tailnet.internal`.
 
-### Subnet router and HA reachability
+### HA reachability (ts-ha-proxy)
 
-- **Route detection**: the container can no longer see host routes (and `ip route` inside a bridge-mode container would only find the docker bridge). `init-tailscale` calls the Supervisor network API (`GET http://supervisor/network/info`) to obtain the host's primary interface: its IPv4 CIDR becomes the advertised route, and its address becomes the HA host IP. If the API is unavailable (standalone/test mode) the router starts with no advertised routes and a prominent warning — there is **no** `10.0.0.0/8` fallback anywhere.
-- **HA access for clients**: HA is reached through the subnet route at its LAN IP. `init-headscale` patches `dns.extra_records` each boot with `homeassistant.<base_domain> → <HA LAN IP>` so clients use a stable name. DOCS recommends a DHCP reservation for the HA host.
+- Clients reach HA at `homeassistant.<base_domain>` — the node's own MagicDNS name — on HA's real port. No subnet route, no accept-routes, no `dns.extra_records`, no LAN-IP or DHCP-reservation dependency: the serve backend targets the internal `homeassistant` hostname on the hassio network, and the port comes from the Supervisor core API each boot (`bashio::core.port`, with `bashio::core.ssl` informing the URL scheme shown in docs/logs).
+- HA terminates its own TLS through the TCP forward, so the user's existing certificate setup behaves identically to LAN access.
+
+### Subnet router (ts-subnet-router — optional, default off)
+
+- **Route detection**: the container can no longer see host routes (and `ip route` inside a bridge-mode container would only find the docker bridge). `init-subnet-router` calls the Supervisor network API (`GET http://supervisor/network/info`) and advertises the host's primary interface CIDR. If the API is unavailable (standalone/test mode) the router starts with no advertised routes and a prominent warning — there is **no** `10.0.0.0/8` fallback anywhere.
 - **Exit node**: unchanged option, off by default, works under userspace networking.
 
 ### ACL policy
 
-Seed policy (first run), same shape as v0.6.0 but with the HA host as a LAN IP and no broad fallbacks:
+Seed policy (first run) — tag-based, so it is fully seedable before any node joins, with no IPs and no broad fallbacks (`<ha_port>` resolved from the Supervisor core API at seed time):
 
 ```jsonc
 {
-  "hosts":  { "ha": "<HA LAN IP>/32" },
+  "tagOwners": {
+    "tag:homeassistant": [],      // only the addon (via pre-auth key) assigns these
+    "tag:subnet-router": []
+  },
   "groups": {
     "group:admins": [],
     "group:users": [/* from the users option, as name@ */],
@@ -155,24 +165,26 @@ Seed policy (first run), same shape as v0.6.0 but with the HA host as a LAN IP a
   },
   "acls": [
     { "action": "accept", "src": ["group:admins"],        "dst": ["*:*"] },
-    { "action": "accept", "src": ["group:users"],         "dst": ["ha:*"] },
+    { "action": "accept", "src": ["group:users"],         "dst": ["tag:homeassistant:*"] },
     { "action": "accept", "src": ["group:subnet-access"], "dst": ["<detected routes>:*"] },
-    { "action": "accept", "src": ["autogroup:member"],    "dst": ["ha:8123"] }
+    { "action": "accept", "src": ["autogroup:member"],    "dst": ["tag:homeassistant:<ha_port>"] }
   ]
 }
 ```
 
-On every subsequent boot, `init-policy` performs two **surgical, add-only** updates via the policy API (GET → jq edit → SET), preserving all user customizations made in Headplane:
-- `hosts.ha` is corrected if the HA LAN IP changed.
-- `group:users` gains (never loses) entries from the `users` option.
+The subnet-access rule is seeded only when the subnet router is enabled at first run; enabling the router later adds it via the surgical merge (add-only, and only if no `group:subnet-access` rule already exists).
 
-If the subnet-access rule's destination no longer matches detected routes, nothing is auto-edited — routes are the user's policy domain once they've touched the ACL.
+On every subsequent boot, `init-policy` performs **surgical, add-only** updates via the policy API (GET → jq edit → SET), preserving all user customizations made in Headplane:
+- `group:users` gains (never loses) entries from the `users` option.
+- The subnet-access rule is added if the router was newly enabled and no such rule exists.
+
+Route destinations are never auto-edited once present — routes are the user's policy domain after they've touched the ACL.
 
 ### User provisioning
 
 The `users: [alice, bob]` option replaces reading HA's auth store. Each boot, `init-policy` creates any missing headscale users before touching the ACL (idempotent, by name; headscale 0.29 user CLI is ID-based for mutations — lookups via `-o json | jq`). **No pre-auth keys are generated for humans and none are logged**; DOCS directs users to mint keys in Headplane (its intended workflow).
 
-The addon's own nodes (subnet router, Headplane agent) join with **single-use, 1-hour** pre-auth keys minted only when no persisted tailscale state exists; the key value is never logged and expires on its own. Node identity persists in `/data/tailscale/` and `/data/headplane/agent/` across restarts, so re-keying happens only after a state wipe.
+The addon's own nodes (HA proxy, subnet router, Headplane agent) join with **single-use, 1-hour** pre-auth keys minted only when no persisted tailscale state exists — the proxy and router keys created with their respective `--tags` so the ACL's tag rules apply from the moment of join. The key value is never logged and expires on its own. Node identity persists in `/data/tailscale/` and `/data/headplane/agent/` across restarts, so re-keying happens only after a state wipe.
 
 ### Credentials policy
 
@@ -180,7 +192,7 @@ The addon's own nodes (subnet router, Headplane agent) join with **single-use, 1
 |---|---|
 | Headplane API key | Created once, 10-year expiry, `0600` file, **never logged** (log the file path only). Rotation: documented one-liner (expire + recreate + restart addon; init rewrites Headplane config from the file). Excluded from backups (regenerates on restore). |
 | Cookie secret | Generated once, excluded from backups (restore = sessions invalidated, harmless). |
-| Join keys (router/agent) | Single-use, 1 h expiry, generated on demand; not stored long-term. |
+| Join keys (proxy/router/agent) | Single-use, 1 h expiry, tagged, generated on demand; not stored long-term. |
 | Noise + DERP private keys | Excluded from backups (regenerate; clients re-pin on next connect). |
 | Headscale DB | **In** backups by necessity (it *is* the tailnet state) — hence the DOCS sensitivity note. |
 
@@ -266,9 +278,9 @@ Environment (verified against public 2026 workflows — FaserF/hassio-addons and
 
 Scenarios and assertions:
 
-1. **Install/configure/start** via `ha apps` / Supervisor REST with test options (HTTP/IP mode — no public domain in CI; `users: [e2etest]`).
+1. **Install/configure/start** via `ha apps` / Supervisor REST with test options (HTTP/IP mode — no public domain in CI; `users: [e2etest]`; `subnet_router.enabled: true` so the optional path is exercised too).
 2. **Ingress works and is exclusive**: create an ingress session (`POST /api/hassio/ingress/session`), fetch the Headplane UI through `/api/hassio_ingress/<token>/` — 200. If `proxy_auth` is enabled: assert auto-login (no API-key form). From a second container on the Supervisor network, hit the addon's ingress port directly — assert refused. *(The lateral-movement regression test.)*
-3. **Real client join + ACL enforcement**: a `tailscale/tailscale` container joins via `tailscale up --login-server` with a key minted for `e2etest`; assert it can reach `ha:8123` (per seed policy), **cannot** reach any other LAN-route destination (not in `group:subnet-access`), and after adding it to `group:subnet-access` via the policy API, traffic flows through the subnet route to a target container.
+3. **Real client join + ACL enforcement**: a `tailscale/tailscale` container joins via `tailscale up --login-server` with a key minted for `e2etest`; assert it reaches HA through the serve proxy at `homeassistant.<base_domain>:<discovered port>` (this doubles as the serve-vs-headscale verification), **cannot** reach any LAN-route destination (not in `group:subnet-access`), and after adding it to `group:subnet-access` via the policy API, traffic flows through the subnet route to a target container.
 4. **Credential hygiene**: grep full addon logs for the API-key value — must be absent; assert key file exists with mode 0600.
 5. **Lifecycle**: restart → same node identities, no re-provisioning, policy user-edits intact (make a surgical-safe edit first, restart, assert preserved). Backup → uninstall → restore → addon healthy; excluded files regenerated fresh.
 6. **AppArmor**: attempt profile load; if the runner environment can't load it (a known issue — one reference workflow stubs `apparmor_parser`), stub it and mark the step advisory. Real enforcement gets verified manually on the HA VM before release (and by the HAOS-in-QEMU sketch in Future work, if ever picked up).
@@ -283,14 +295,15 @@ ACME issuance needs a public domain — all CI runs in HTTP/IP mode; TLS config 
 
 - Headscale 0.28 → 0.29.3 migrates its DB on first start (one-minor jump — supported).
 - Headplane config is regenerated every boot from the addon template → 0.7.0 format applied automatically; API key file carries over.
-- The removed "homeassistant" TUN node: init detects and deletes leftover `/data/tailscale/ha/` state and removes the node from headscale (log a notice; clients that targeted its tailnet IP move to `homeassistant.<base_domain>` — CHANGELOG calls this out as the one breaking change).
-- Existing ACLs: the surgical `hosts.ha` update repoints the `ha` host from the dead node's tailnet IP to the HA LAN IP on first boot after upgrade; everything else in a user-edited policy is left alone.
+- The old TUN "homeassistant" node and the old subnet-router node are removed from headscale and their state dirs (`/data/tailscale/ha/`, `/data/tailscale/subnet/`) deleted; the new tagged userspace nodes join fresh. Clients that targeted the old tailnet IP move to `homeassistant.<base_domain>` — CHANGELOG calls this out as a breaking change.
+- `subnet_router.enabled` default flips to **false**; upgraders who relied on the default-on router must re-enable it (CHANGELOG breaking-change note).
+- Existing ACLs are **not** auto-rewritten (edits can't be reliably distinguished from the old seed): the addon logs a prominent one-time notice with the exact tag-based rules to add (`hosts.ha`-based rules point at the removed node and are dead but harmless).
 - Stored per-HA-user pre-auth keys under `/data/headplane/user_keys/` and `ha_users.txt` are deleted; existing already-joined devices are untouched (their node keys live in the DB).
 - Removed config keys are dropped from the schema; Supervisor tolerates removed options.
 
 ## Documentation updates (DOCS.md)
 
-New/updated sections: security model & residual risk (control-plane compromise, backups sensitivity); the `users` option and Headplane-based key workflow; HA access via `homeassistant.<base_domain>` (breaking change note + DHCP reservation advice); direct-port warning; API-key rotation procedure; ACL groups explainer (admins / users / subnet-access); CI/release badges.
+New/updated sections: security model & residual risk (control-plane compromise, backups sensitivity); the `users` option and Headplane-based key workflow; HA access via `homeassistant.<base_domain>` on HA's actual port/scheme (breaking change note for upgraders); subnet router as opt-in LAN exposure; direct-port warning; API-key rotation procedure; ACL groups & tags explainer (admins / users / subnet-access, tag:homeassistant / tag:subnet-router); CI/release badges.
 
 ## Out of scope / future work
 
