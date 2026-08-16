@@ -11,6 +11,11 @@ jobs:
   ci:
     name: CI
     uses: hassio-addons/workflows/.github/workflows/app-ci.yaml@383c10d83acbe341acbb35a4a61bfd14827f00f0 # v3.0.0
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: write
 
   base-sync:
     name: Base image pins match
