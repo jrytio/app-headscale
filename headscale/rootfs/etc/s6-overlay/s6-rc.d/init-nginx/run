@@ -17,7 +17,7 @@ bashio::var.json \
         -out /etc/nginx/servers/upstream.conf
 
 # Generate ingress config
-ingress_port=$(bashio::addon.ingress_port)
+ingress_port=$(bashio::app.ingress_port)
 bashio::log.info "Ingress port: ${ingress_port}"
 bashio::var.json \
     port "^${ingress_port}" \
@@ -26,8 +26,8 @@ bashio::var.json \
         -out /etc/nginx/servers/ingress.conf
 
 # Generate direct access config
-if bashio::var.has_value "$(bashio::addon.port 8080)"; then
-    direct_port=$(bashio::addon.port 8080)
+if bashio::var.has_value "$(bashio::app.port 8080)"; then
+    direct_port=$(bashio::app.port 8080)
     bashio::log.info "Direct access enabled on port ${direct_port}"
     bashio::var.json \
         port "^${direct_port}" \

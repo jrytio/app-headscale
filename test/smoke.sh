@@ -63,6 +63,17 @@ assert "no preauthkey values in logs" \
 assert "subnet router absent when disabled (default)" \
   bash -c "! docker exec $C s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml | jq -e '.[] | select(.name==\"subnet-router\")'"
 
+assert "ingress vhost denies non-supervisor sources" \
+  bash -c "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:62000/admin/ | grep -q 403"
+assert "direct vhost serves headplane" \
+  bash -c "curl -fs -o /dev/null http://127.0.0.1:8080/admin/login"
+assert "direct vhost strips identity headers" \
+  bash -c "curl -fs -H 'X-Remote-User-Name: attacker' http://127.0.0.1:8080/admin/login -o /dev/null"
+assert "direct vhost rate-limits the login path" \
+  bash -c "for i in \$(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:8080/admin/login; done; curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/admin/login | grep -qE '429|503'"
+assert "nginx workers run as nginx user" \
+  bash -c "docker exec $C ps -o user,comm | grep nginx | grep -qv root"
+
 echo "== subnet-router enabled variant =="
 # Reuse the SAME compose service/image/volume, but boot it standalone with
 # the router-enabled options file over the options mount, so the addon's
