@@ -72,7 +72,9 @@ assert "direct vhost strips identity headers" \
 assert "direct vhost rate-limits the login path" \
   bash -c "for i in \$(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:8080/admin/login; done; curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/admin/login | grep -qE '429|503'"
 assert "nginx workers run as nginx user" \
-  bash -c "docker exec $C ps -o user,comm | grep nginx | grep -qv root"
+  bash -c "docker exec $C ps -o user,args | grep 'nginx: worker process' | grep -v '^root' | grep -q nginx"
+assert "nginx master is root (documented exception)" \
+  bash -c "docker exec $C ps -o user,args | grep 'nginx: master process' | grep -q '^root'"
 
 echo "== subnet-router enabled variant =="
 # Reuse the SAME compose service/image/volume, but boot it standalone with
