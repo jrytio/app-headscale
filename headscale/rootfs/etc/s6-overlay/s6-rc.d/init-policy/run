@@ -86,6 +86,7 @@ if ! bashio::fs.file_exists "${SEED_MARKER}"; then
     ]
 }
 ACLEOF
+    chown headscale:headscale "${acl_tmp}"
     if hs policy set -f "${acl_tmp}"; then
         printf '%s' "1" > "${SEED_MARKER}"
         bashio::log.info "Access policy seeded."
@@ -127,6 +128,7 @@ else
                 elif [ "${merged_canon}" != "${current_canon}" ]; then
                     merge_tmp="/tmp/merged_policy.json"
                     echo "${merged}" > "${merge_tmp}"
+                    chown headscale:headscale "${merge_tmp}"
                     if hs policy set -f "${merge_tmp}"; then
                         bashio::log.info "Policy updated (add-only merge)."
                     else

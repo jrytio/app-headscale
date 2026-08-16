@@ -15,3 +15,43 @@ This addon runs with **no** host networking and **no** privileged capabilities. 
 ## Documentation
 
 See [headscale/DOCS.md](headscale/DOCS.md) for full setup instructions, configuration options, and troubleshooting.
+
+## Repository settings (maintainer checklist)
+
+These are one-time, manual GitHub repository settings the automation in
+`.github/workflows/` depends on. They are not stored in this repo, so a fresh
+fork or a new maintainer needs to configure them by hand:
+
+- **Enable auto-merge** — Settings → General → Pull Requests → check "Allow
+  auto-merge". Required for `auto-merge.yaml` to be able to call
+  `gh pr merge --auto`.
+- **Create a fine-grained PAT with `contents: write` and save it as the
+  `RELEASE_TOKEN` secret** (Settings → Secrets and variables → Actions).
+  `release.yaml`, `scheduled.yaml`, and `auto-merge.yaml` all push commits or
+  merge PRs with this token instead of the default `GITHUB_TOKEN` — GitHub
+  does not trigger downstream workflow runs (e.g. `release.yaml` firing off a
+  push to `main`) for events authored by `GITHUB_TOKEN`, so a PAT-backed
+  token is required for the release chain to actually fire.
+- **Branch protection on `main`** — require these status checks before
+  merging:
+  - the reusable CI jobs from `hassio-addons/workflows` (lint/build matrix)
+  - `Base image pins match`
+  - `Smoke test`
+  - `Trivy scan`
+  - `Supervisor e2e`
+
+  Add a bypass for the `RELEASE_TOKEN` identity (the user/app the PAT belongs
+  to) so the automated `release:` version-bump commit and tag push in
+  `release.yaml` aren't themselves blocked by the protection rule.
+- **GHCR packages must be public** (or grant the Home Assistant Supervisor's
+  pull path explicit read access) — `ghcr.io/<owner>/{arch}-addon-headscale`
+  is pulled anonymously by installs; a private package will fail to install
+  for anyone without registry credentials configured in their Supervisor.
+- **Base image pin is updated manually.** Dependabot's Docker ecosystem
+  cannot track `FROM ${BUILD_FROM}` in `headscale/Dockerfile` because the tag
+  is parameterized through an `ARG` rather than a literal `FROM` line —
+  Dependabot only parses literal image references. The `Base image pins
+  match` CI check (`base-sync` job in `ci.yaml`) only guards against
+  `ARG BUILD_FROM` and `headscale/build.yaml` drifting apart from each other;
+  it does not detect a new upstream base image release. Bumping to a newer
+  `hassio-addons/base` version is a manual edit to both files.

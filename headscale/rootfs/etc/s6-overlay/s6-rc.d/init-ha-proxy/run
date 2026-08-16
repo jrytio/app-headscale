@@ -18,6 +18,13 @@ if [ ! -f "${STATE_DIR}/.joined" ]; then
         join_key=$(hs preauthkeys create --user "${addon_uid}" --tags tag:homeassistant 2>/dev/null) || true
         if bashio::var.has_value "${join_key}"; then
             (umask 077 && printf '%s' "${join_key}" > "${KEY_FILE}")
+            # ts-ha-proxy/run passes this to `tailscale up` as
+            # --authkey file:${KEY_FILE}, which is opened by the tailscale
+            # CLI running as the unprivileged tailscale user — chown it
+            # (this script runs as root) so that read can succeed under
+            # both plain Unix permissions and AppArmor's owner-scoped
+            # /tmp/** rule.
+            chown tailscale:tailscale "${KEY_FILE}"
             bashio::log.info "HA proxy join key minted (single-use, 1h)."
         else
             bashio::log.warning "Could not mint HA proxy join key."

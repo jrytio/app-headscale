@@ -23,4 +23,9 @@ jobs:
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN merges do not trigger other workflows (GitHub
+          # suppresses workflow runs triggered by the default token), which
+          # would silently prevent release.yaml from firing on merge to
+          # main. Use the PAT-backed RELEASE_TOKEN instead so the merge
+          # commit lands as a normal push and the release workflow runs.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}

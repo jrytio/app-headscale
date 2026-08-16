@@ -24,8 +24,6 @@ ports_description:
   3478/udp: STUN relay
   8080/tcp: Headplane direct access (bypasses Home Assistant auth — leave disabled unless you need it)
 hassio_api: true
-map:
-  - ssl
 options:
   server_url: ""
   log_level: info

@@ -38,7 +38,7 @@ fi
 
 up_args=(--login-server "${login_server}" --hostname homeassistant --accept-dns=false --accept-routes=false)
 if [ -f "${KEY_FILE}" ]; then
-    up_args+=(--authkey "$(cat "${KEY_FILE}")")
+    up_args+=(--authkey "file:${KEY_FILE}")
 fi
 if timeout 60 s6-setuidgid tailscale /usr/local/bin/tailscale --socket="${SOCKET}" up "${up_args[@]}"; then
     rm -f "${KEY_FILE}"
@@ -47,11 +47,23 @@ if timeout 60 s6-setuidgid tailscale /usr/local/bin/tailscale --socket="${SOCKET
     bashio::log.info "HA proxy node is on the tailnet."
     # Forward the tailnet-side HA port to Home Assistant. Backend hostname
     # 'homeassistant' resolves on the internal hassio network (mocked in tests).
-    if s6-setuidgid tailscale /usr/local/bin/tailscale --socket="${SOCKET}" \
-        serve --bg --tcp="${HA_PORT}" "tcp://homeassistant:${HA_PORT}"; then
+    # `tailscale serve` can transiently fail right after `up` completes (a
+    # known boot-order flake — the local backend isn't quite ready to accept
+    # serve config yet), so retry a bounded number of times before giving up.
+    serve_ok=false
+    for attempt in 1 2 3; do
+        if s6-setuidgid tailscale /usr/local/bin/tailscale --socket="${SOCKET}" \
+            serve --bg --tcp="${HA_PORT}" "tcp://homeassistant:${HA_PORT}"; then
+            serve_ok=true
+            break
+        fi
+        bashio::log.warning "tailscale serve setup failed (attempt ${attempt}/3)."
+        [ "${attempt}" -lt 3 ] && sleep 5
+    done
+    if [ "${serve_ok}" = "true" ]; then
         bashio::log.info "Serving Home Assistant at homeassistant.tailnet.internal:${HA_PORT}"
     else
-        bashio::log.warning "tailscale serve setup failed — HA not reachable via tailnet."
+        bashio::log.warning "tailscale serve setup failed after 3 attempts — HA not reachable via tailnet."
     fi
 else
     # The key may have been consumed or gone stale — drop it so the next

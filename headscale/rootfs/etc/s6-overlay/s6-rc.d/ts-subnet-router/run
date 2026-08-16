@@ -43,7 +43,7 @@ fi
 
 up_args=(--login-server "${login_server}" --hostname subnet-router --accept-dns=false --accept-routes=false)
 if [ -f "${KEY_FILE}" ]; then
-    up_args+=(--authkey "$(cat "${KEY_FILE}")")
+    up_args+=(--authkey "file:${KEY_FILE}")
 fi
 if bashio::var.has_value "${TS_ROUTES:-}"; then
     up_args+=(--advertise-routes "${TS_ROUTES}")
