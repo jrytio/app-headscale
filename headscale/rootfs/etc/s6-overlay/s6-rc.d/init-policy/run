@@ -96,7 +96,7 @@ ACLEOF
     fi
 else
     # Surgical add-only merges; failures are loud but non-fatal (policy exists).
-    current=$(hs policy get 2>/dev/null)
+    current=$(hs policy get 2>/dev/null) || current=""
     if bashio::var.has_value "${current}"; then
         hujson_warning="Stored policy is not plain JSON (HuJSON comments?) — skipping automatic policy merge."
         current_canon=""
