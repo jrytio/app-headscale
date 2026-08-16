@@ -1,12 +1,7 @@
 #!/command/with-contenv bashio
 # shellcheck shell=bash
-# ==============================================================================
-# Home Assistant Addon: Headscale
-# Runs the Headplane web UI
-# ==============================================================================
-
 bashio::log.info "Starting Headplane..."
-
 cd /opt/headplane || bashio::exit.nok "Headplane directory not found"
-
-exec /usr/bin/node build/server/index.js
+export HEADPLANE_CONFIG_PATH=/etc/headplane/config.yaml
+export HEADPLANE_LISTEN_FILE=/tmp/headplane-listen
+exec s6-setuidgid headplane /usr/bin/node /opt/headplane/build/server/index.js

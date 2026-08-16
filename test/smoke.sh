@@ -35,4 +35,16 @@ assert "users: e2etest + addon + headplane-agent exist" \
 assert "policy: group:users contains e2etest@" \
   bash -c "docker exec $C s6-setuidgid headscale headscale policy get --config /data/headscale/config.yaml | jq -e '.groups[\"group:users\"] | index(\"e2etest@\")'"
 
+assert "headplane login page responds" \
+  bash -c "docker exec $C curl -fs -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/admin/login | grep -q 200"
+# Node 24's main thread is named "MainThread" (not "node") in comm/ps output
+# (libuv thread naming), so match on the unique server entrypoint in args
+# instead of the comm column.
+assert "headplane runs as non-root" \
+  bash -c "docker exec $C ps -o user,args | grep 'headplane/build/server/index.js' | grep -qv '^root'"
+assert "api key file exists with 0600" \
+  bash -c "docker exec $C stat -c %a /data/headplane/api_key | grep -q 600"
+assert "api key value never appears in logs" \
+  bash -c "! docker logs $C 2>&1 | grep -qF \"\$(docker exec $C cat /data/headplane/api_key)\""
+
 exit $FAIL

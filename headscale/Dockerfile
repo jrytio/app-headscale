@@ -40,5 +40,9 @@ RUN mkdir -p /etc/nginx/servers /var/run/nginx /var/run/tailscale /etc/headplane
     && chown tailscale:tailscale /var/run/tailscale \
     && find /etc/s6-overlay/s6-rc.d \( -name run -o -name finish \) -exec chmod +x {} +
 
+# hp_healthcheck reads HEADPLANE_LISTEN_FILE; the HEALTHCHECK CMD runs
+# without the headplane service's own env, so it must be set here too.
+ENV HEADPLANE_LISTEN_FILE=/tmp/headplane-listen
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s \
     CMD /usr/local/bin/hp_healthcheck || exit 1
