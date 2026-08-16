@@ -21,17 +21,24 @@ create_user() {
 create_user "addon"
 create_user "headplane-agent"
 option_users=$(bashio::config 'users') || option_users=""
-for u in ${option_users}; do
+while IFS= read -r u; do
+    [ -z "${u}" ] && continue
     [ "${u}" = "null" ] && continue
     create_user "${u}"
-done
+done <<< "${option_users}"
 
 # --- Build group:users JSON from options ---
 users_json=$(bashio::config 'users' | jq -Rs '[split("\n")[] | select(length>0 and . != "null") | . + "@"]')
 
 # --- Detected routes (only matter if subnet router enabled) ---
 cidr_network() { # 192.168.77.10/24 -> 192.168.77.0/24 (IPv4 only, pure bash)
+    if ! [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$ ]]; then
+        return 1
+    fi
     local ip="${1%/*}" bits="${1#*/}" IFS=. o1 o2 o3 o4 m
+    if [ "${bits}" -lt 0 ] || [ "${bits}" -gt 32 ]; then
+        return 1
+    fi
     read -r o1 o2 o3 o4 <<< "${ip}"
     m=$(( 0xFFFFFFFF << (32 - bits) & 0xFFFFFFFF ))
     local n=$(( ((o1<<24 | o2<<16 | o3<<8 | o4) & m) ))
@@ -42,7 +49,10 @@ if bashio::config.true 'subnet_router.enabled'; then
     routes=$(bashio::network "network_info" \
         '.interfaces[] | select(.primary==true) | .ipv4.address[0]' 2>/dev/null) || true
     if bashio::var.has_value "${routes}" && [ "${routes}" != "null" ]; then
-        routes=$(cidr_network "${routes}")
+        if ! routes=$(cidr_network "${routes}"); then
+            routes=""
+            bashio::log.warning "Subnet router enabled but no route detected (Supervisor API unavailable?)"
+        fi
     else
         routes=""
         bashio::log.warning "Subnet router enabled but no route detected (Supervisor API unavailable?)"
@@ -88,20 +98,41 @@ else
     # Surgical add-only merges; failures are loud but non-fatal (policy exists).
     current=$(hs policy get 2>/dev/null)
     if bashio::var.has_value "${current}"; then
-        merged=$(echo "${current}" | jq --argjson add "${users_json}" \
-            '.groups["group:users"] = ((.groups["group:users"] // []) + $add | unique)')
-        if bashio::var.has_value "${routes}" \
-            && ! echo "${current}" | jq -e '.acls[] | select(.src==["group:subnet-access"])' >/dev/null; then
-            merged=$(echo "${merged}" | jq --arg dst "${routes}:*" \
-                '.acls += [{"action":"accept","src":["group:subnet-access"],"dst":[$dst]}]')
-        fi
-        if [ "${merged}" != "${current}" ]; then
-            merge_tmp="/tmp/merged_policy.json"
-            echo "${merged}" > "${merge_tmp}"
-            if hs policy set -f "${merge_tmp}"; then
-                bashio::log.info "Policy updated (add-only merge)."
+        hujson_warning="Stored policy is not plain JSON (HuJSON comments?) — skipping automatic policy merge."
+        current_canon=""
+        if ! current_canon=$(echo "${current}" | jq -S . 2>/dev/null); then
+            bashio::log.warning "${hujson_warning}"
+        else
+            merge_failed=0
+            merged="${current}"
+            if ! merged=$(echo "${merged}" | jq --argjson add "${users_json}" \
+                '.groups["group:users"] = ((.groups["group:users"] // []) + $add | unique)' 2>/dev/null); then
+                merge_failed=1
+            fi
+
+            if [ "${merge_failed}" -eq 0 ] && bashio::var.has_value "${routes}" \
+                && ! echo "${current}" | jq -e '.acls[] | select(.src==["group:subnet-access"])' >/dev/null 2>&1; then
+                if ! merged=$(echo "${merged}" | jq --arg dst "${routes}:*" \
+                    '.acls += [{"action":"accept","src":["group:subnet-access"],"dst":[$dst]}]' 2>/dev/null); then
+                    merge_failed=1
+                fi
+            fi
+
+            if [ "${merge_failed}" -eq 1 ]; then
+                bashio::log.warning "${hujson_warning}"
             else
-                bashio::log.error "Policy merge failed — existing policy left unchanged."
+                merged_canon=""
+                if ! merged_canon=$(echo "${merged}" | jq -S . 2>/dev/null); then
+                    bashio::log.warning "${hujson_warning}"
+                elif [ "${merged_canon}" != "${current_canon}" ]; then
+                    merge_tmp="/tmp/merged_policy.json"
+                    echo "${merged}" > "${merge_tmp}"
+                    if hs policy set -f "${merge_tmp}"; then
+                        bashio::log.info "Policy updated (add-only merge)."
+                    else
+                        bashio::log.error "Policy merge failed — existing policy left unchanged."
+                    fi
+                fi
             fi
         fi
     else

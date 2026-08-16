@@ -31,7 +31,7 @@ assert "policy: seeded with tag:homeassistant rule" \
 assert "policy: no allow-all member rule" \
   bash -c "! docker exec $C s6-setuidgid headscale headscale policy get --config /data/headscale/config.yaml | jq -e '.acls[] | select(.src==[\"autogroup:member\"] and .dst==[\"*:*\"])'"
 assert "users: e2etest + addon + headplane-agent exist" \
-  bash -c "docker exec $C s6-setuidgid headscale headscale users list -o json --config /data/headscale/config.yaml | jq -r '.[].name' | grep -qx 'e2etest'"
+  bash -c "names=\$(docker exec $C s6-setuidgid headscale headscale users list -o json --config /data/headscale/config.yaml | jq -r '.[].name'); echo \"\$names\" | grep -qx 'e2etest' && echo \"\$names\" | grep -qx 'addon' && echo \"\$names\" | grep -qx 'headplane-agent'"
 assert "policy: group:users contains e2etest@" \
   bash -c "docker exec $C s6-setuidgid headscale headscale policy get --config /data/headscale/config.yaml | jq -e '.groups[\"group:users\"] | index(\"e2etest@\")'"
 
