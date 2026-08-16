@@ -60,4 +60,38 @@ assert "serve forwards HA_PORT" \
 assert "no preauthkey values in logs" \
   bash -c "! docker logs $C 2>&1 | grep -E 'hskey-auth-[A-Za-z0-9_-]{40,}'"
 
+assert "subnet router absent when disabled (default)" \
+  bash -c "! docker exec $C s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml | jq -e '.[] | select(.name==\"subnet-router\")'"
+
+echo "== subnet-router enabled variant =="
+# Reuse the SAME compose service/image/volume, but boot it standalone with
+# the router-enabled options file over the options mount, so the addon's
+# already-seeded /data (headscale db, policy, users) carries over. The
+# --network container: + --volumes-from pattern fights compose locally, so
+# instead: stop the compose-managed addon container (freeing its name/ports),
+# capture its network/volume/image, then `docker run` a fresh container from
+# the same image/volume with test/options-router.json bind-mounted read-only
+# over /data/options.json. entrypoint.sh regenerates the Supervisor mock's
+# options endpoint from that file at boot (see harness fix above), so
+# bashio::config sees subnet_router.enabled=true for this run.
+ROUTER_NET=$(docker inspect "$C" -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+ROUTER_VOL=$(docker inspect "$C" -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')
+ROUTER_IMG=$(docker inspect "$C" -f '{{.Config.Image}}')
+docker compose -f docker-compose.test.yml stop headscale-addon >/dev/null 2>&1
+docker rm -f "${C}-router" >/dev/null 2>&1 || true
+docker run -d --rm --name "${C}-router" \
+  --network "${ROUTER_NET}" \
+  -v "${ROUTER_VOL}:/data" \
+  -v "$PWD/test/options-router.json":/data/options.json:ro \
+  -v "$PWD/test":/test:ro \
+  -e SUPERVISOR_TOKEN=test-token-not-real \
+  --entrypoint /bin/bash "${ROUTER_IMG}" /test/entrypoint.sh >/dev/null 2>&1
+sleep 45
+assert "subnet router joins with tag and approved route" \
+  bash -c "docker exec ${C}-router s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml | jq -e '.[] | select(.name==\"subnet-router\") | (.tags // [] | index(\"tag:subnet-router\")) or (.forcedTags // [] | index(\"tag:subnet-router\")) or (.validTags // [] | index(\"tag:subnet-router\"))'"
+assert "route 192.168.77.0/24 approved" \
+  bash -c "docker exec ${C}-router s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml | jq -e '[.[].approved_routes // []] | flatten | index(\"192.168.77.0/24\")'"
+docker stop "${C}-router" >/dev/null 2>&1 || true
+docker compose -f docker-compose.test.yml up -d >/dev/null 2>&1
+
 exit $FAIL

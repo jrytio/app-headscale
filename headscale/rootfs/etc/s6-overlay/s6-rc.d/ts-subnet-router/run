@@ -1,0 +1,76 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+readonly STATE_DIR="/data/tailscale/subnet-router"
+readonly SOCKET="/var/run/tailscale/subnet-router.sock"
+readonly KEY_FILE="/tmp/subnet-router-join-key"
+
+if ! bashio::config.true 'subnet_router.enabled'; then
+    # Tell s6 to bring this service down without killing the container.
+    exec s6-svc -Od /run/service/ts-subnet-router
+fi
+
+bashio::log.info "Starting subnet router..."
+
+s6-setuidgid tailscale /usr/local/bin/tailscaled \
+    --statedir="${STATE_DIR}" \
+    --socket="${SOCKET}" \
+    --tun=userspace-networking &
+TS_PID=$!
+trap 'kill ${TS_PID} 2>/dev/null; wait' EXIT TERM
+
+for i in $(seq 1 30); do [ -S "${SOCKET}" ] && break; sleep 1; done
+[ -S "${SOCKET}" ] || bashio::log.warning "Timed out waiting for socket: ${SOCKET}"
+
+# In-container nodes must log in against headscale's LOCAL listener, not the
+# public HS_LOGIN_SERVER: in HTTP test mode HS_LOGIN_SERVER is
+# "http://127.0.0.1" with no port, which resolves to port 80 inside this
+# container — the Supervisor mock httpd, not headscale (headscale listens on
+# 8081 in HTTP mode / 8443 in TLS mode). init-headscale already computes the
+# correct same-container target as HS_LOCAL_URL
+# (http://127.0.0.1:8081 | https://<hs_host>:8443, the latter resolving via
+# the /etc/hosts loopback pin) — use it, with a defensive re-derivation from
+# HS_MODE if it's ever unset.
+login_server="${HS_LOCAL_URL:-}"
+if ! bashio::var.has_value "${login_server}"; then
+    if [ "${HS_MODE}" = "tls" ]; then
+        hs_host=$(echo "${HS_LOGIN_SERVER}" | sed -e 's|https\?://||' -e 's|[:/].*||')
+        login_server="https://${hs_host}:8443"
+    else
+        login_server="http://127.0.0.1:8081"
+    fi
+    bashio::log.warning "HS_LOCAL_URL unset — derived local login server: ${login_server}"
+fi
+
+up_args=(--login-server "${login_server}" --hostname subnet-router --accept-dns=false --accept-routes=false)
+if [ -f "${KEY_FILE}" ]; then
+    up_args+=(--authkey "$(cat "${KEY_FILE}")")
+fi
+if bashio::var.has_value "${TS_ROUTES:-}"; then
+    up_args+=(--advertise-routes "${TS_ROUTES}")
+fi
+if bashio::config.true 'subnet_router.exit_node'; then
+    up_args+=(--advertise-exit-node)
+fi
+
+if timeout 60 s6-setuidgid tailscale /usr/local/bin/tailscale --socket="${SOCKET}" up "${up_args[@]}"; then
+    rm -f "${KEY_FILE}"
+    touch "${STATE_DIR}/.joined"
+    chown tailscale:tailscale "${STATE_DIR}/.joined"
+    bashio::log.info "Subnet router on the tailnet (routes: ${TS_ROUTES:-none})."
+    hs() { s6-setuidgid headscale /usr/local/bin/headscale --config /data/headscale/config.yaml "$@"; }
+    node_id=$(hs nodes list -o json 2>/dev/null | jq -r '.[] | select(.name=="subnet-router") | .id') || true
+    if bashio::var.has_value "${node_id}" && bashio::var.has_value "${TS_ROUTES:-}"; then
+        if hs nodes approve-routes -i "${node_id}" -r "${TS_ROUTES}"; then
+            bashio::log.info "Routes approved: ${TS_ROUTES}"
+        else
+            bashio::log.warning "Route approval failed — approve manually in Headplane."
+        fi
+    fi
+else
+    # The key may have been consumed or gone stale — drop it so the next
+    # boot's init-subnet-router mints a fresh one instead of retrying a dead key.
+    rm -f "${KEY_FILE}"
+    bashio::log.warning "Subnet router could not join the tailnet (will retry on restart)."
+fi
+
+wait ${TS_PID}
