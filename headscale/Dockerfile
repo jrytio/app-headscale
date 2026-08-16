@@ -9,13 +9,17 @@ FROM tailscale/tailscale:v1.102.2 AS tailscale
 FROM ${BUILD_FROM}
 
 # Runtime packages. nodejs on Alpine 3.24 is 24.18.x (headplane needs >=24.2).
+# busybox-extras provides the `busybox httpd` applet used by the standalone
+# test harness (test/entrypoint.sh) to mock the HA Supervisor API — the base
+# image's busybox does not include it.
 RUN apk add --no-cache \
     nodejs \
     nginx \
     jq \
     yq-go \
     curl \
-    openssl
+    openssl \
+    busybox-extras
 
 COPY --from=headscale /ko-app/headscale /usr/local/bin/headscale
 COPY --from=headplane /app /opt/headplane

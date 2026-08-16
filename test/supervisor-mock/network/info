@@ -1,0 +1,1 @@
+{"result": "ok", "data": {"interfaces": [{"interface": "end0", "primary": true, "ipv4": {"address": ["192.168.77.10/24"], "gateway": "192.168.77.1"}}]}}
