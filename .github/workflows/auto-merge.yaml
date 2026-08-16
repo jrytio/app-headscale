@@ -1,6 +1,7 @@
 ---
 name: Dependabot auto-merge
 
+# yamllint disable-line rule:truthy
 on: pull_request
 
 permissions:
@@ -9,7 +10,13 @@ permissions:
 
 jobs:
   auto-merge:
-    if: github.actor == 'dependabot[bot]'
+    # github.actor reflects the last actor to touch the PR ref, not
+    # necessarily who opened it, and is spoofable; the PR's own author
+    # field plus a same-repo check are the trustworthy signals (see
+    # https://docs.zizmor.sh/audits/#bot-conditions).
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.repository == github.event.pull_request.head.repo.full_name
     runs-on: ubuntu-latest
     steps:
       - name: Fetch metadata

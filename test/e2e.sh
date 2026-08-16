@@ -203,6 +203,23 @@ echo "== waiting for nested dockerd (max 120s) =="
 for _ in $(seq 1 40); do sup docker info >/dev/null 2>&1 && break; sleep 3; done
 sup docker info >/dev/null 2>&1 || { bad "nested dockerd did not become ready"; exit 1; }
 
+# Warm the NESTED dockerd's image cache for the addon's Dockerfile FROMs in
+# the background, in parallel with supervisor boot (~300s below) + addon
+# install/configure. Supervisor builds this local (non-published) app from
+# source on first "addon start" — without this warm-up, that build has to
+# pull all 4 base images cold (no BuildKit cache from the outer runner, a
+# separate docker daemon inside the privileged container), which was
+# observed to eat most of the addon's own healthcheck start-period budget
+# and contribute to the container missing the "healthy" window below.
+sup bash -c '
+  docker pull ghcr.io/hassio-addons/base:21.0.1 &
+  docker pull ghcr.io/juanfont/headscale:v0.29.3 &
+  docker pull ghcr.io/tale/headplane:0.7.0 &
+  docker pull tailscale/tailscale:v1.102.2 &
+  wait
+' >/tmp/warm-pull.log 2>&1 &
+WARM_PULL_PID=$!
+
 # local addon dir must be writable and MUST NOT live anywhere under
 # /mnt/supervisor/apps/local/ other than its own final directory — see the
 # header comment on why a sibling full-repo checkout there breaks the store
@@ -257,11 +274,16 @@ supbash 'cat > /tmp/opts.json <<EOF
 EOF'
 check "addon options" api POST /addons/local_headscale/options /tmp/opts.json
 
+# Join the background image warm-pull (see above) before triggering the
+# build — by this point it has had the full supervisor-boot + install +
+# options window to finish, so this is normally an instant no-op.
+wait "$WARM_PULL_PID" 2>/dev/null || true
+
 ha_ok "addon start" "$APPS" start local_headscale
 
-echo "== waiting for addon container to become healthy (max 180s) =="
+echo "== waiting for addon container to become healthy (max 240s) =="
 ADDON_CONTAINER=""
-for _ in $(seq 1 60); do
+for _ in $(seq 1 80); do
   ADDON_CONTAINER=$(sup docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(app|addon)_local_headscale$' | head -1)
   if [ -n "$ADDON_CONTAINER" ]; then
     STATUS=$(sup docker inspect "$ADDON_CONTAINER" -f '{{.State.Health.Status}}' 2>/dev/null || echo "")
@@ -312,15 +334,27 @@ check "ingress serves via supervisor (local_headscale panel present)" ingress_vi
 # about peers its policy grants it access to). This is a more direct test of
 # the control-plane boundary than a data-plane round trip would be anyway.
 USER_ID=$(hsx users list -o json | jq -r '.[] | select(.name=="e2etest") | .id')
+# Fail fast on a broken/unreachable headscale rather than feeding an empty
+# user id into `preauthkeys create` (which errors immediately) and then an
+# empty/garbage authkey into `tailscale up` against a login-server that may
+# not really be answering — that combination was observed to hang
+# indefinitely (no interactive TTY to prompt, no timeout on the exec),
+# burning the whole job timeout instead of failing with useful diagnostics.
+[ -n "$USER_ID" ] || { bad "could not resolve e2etest user id (headscale config missing/unreachable?)"; exit 1; }
 AUTHKEY=$(hsx preauthkeys create --user "$USER_ID")
+[ -n "$AUTHKEY" ] || { bad "could not create preauthkey for e2etest"; exit 1; }
 # --socks5-server enables a real data-plane round trip below (see "SOCKS5
 # data-path ACL test"), in addition to the control-plane peer-visibility
 # checks that follow immediately.
 sup docker run -d --name ts-client --network hassio tailscale/tailscale:v1.102.2 \
   tailscaled --tun=userspace-networking --socket=/tmp/ts.sock --socks5-server=localhost:1055
 sleep 5
+# Hard-timeout guard: `tailscale up` can block indefinitely against an
+# unresponsive login-server instead of erroring out (see comment above) —
+# bound it explicitly so a broken addon fails this check in 60s instead of
+# hanging until the job's overall timeout-minutes cancels the whole run.
 check "client joins tailnet" \
-  sup docker exec ts-client tailscale --socket=/tmp/ts.sock up \
+  timeout 60 docker exec "$SUP" docker exec ts-client tailscale --socket=/tmp/ts.sock up \
     --login-server "http://${ADDON_IP}:8081" --authkey "$AUTHKEY" --hostname e2eclient --accept-dns=false
 sleep 10
 check "client sees homeassistant peer (group:users ACL grant)" \
@@ -408,7 +442,7 @@ TEST_ROUTE="203.0.113.0/24"
 HS_LOCAL_URL=$(sup docker exec "$ADDON_CONTAINER" cat /var/run/s6/container_environment/HS_LOCAL_URL 2>/dev/null)
 [ -n "$HS_LOCAL_URL" ] || HS_LOCAL_URL="http://127.0.0.1:8081"
 check "subnet-router advertises test route" \
-  sup docker exec "$ADDON_CONTAINER" s6-setuidgid tailscale /usr/local/bin/tailscale \
+  timeout 60 docker exec "$SUP" docker exec "$ADDON_CONTAINER" s6-setuidgid tailscale /usr/local/bin/tailscale \
     --socket=/var/run/tailscale/subnet-router.sock up \
     --login-server "$HS_LOCAL_URL" --hostname subnet-router --accept-dns=false --accept-routes=false \
     --advertise-routes="$TEST_ROUTE"

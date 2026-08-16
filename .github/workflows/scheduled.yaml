@@ -1,19 +1,21 @@
 ---
 name: Scheduled
 
+# yamllint disable-line rule:truthy
 on:
   schedule:
     - cron: "17 4 * * 1"
   workflow_dispatch:
 
-permissions:
-  contents: write
-  issues: write
-  packages: read
-
 jobs:
   refresh-check:
     runs-on: ubuntu-latest
+    # actions/checkout below is given the RELEASE_TOKEN explicitly (needed so
+    # the resulting push triggers release.yaml — the default GITHUB_TOKEN
+    # cannot do that), so the ambient token only needs read scopes here.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -49,11 +51,16 @@ jobs:
 
   trivy-published:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
       - name: Scan latest published image
         id: scan
-        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         continue-on-error: true
         with:
           image-ref: ghcr.io/${{ github.repository_owner }}/amd64-addon-headscale:latest

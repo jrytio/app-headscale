@@ -1,6 +1,7 @@
 ---
 name: Release
 
+# yamllint disable-line rule:truthy
 on:
   push:
     branches:
@@ -46,8 +47,9 @@ jobs:
       - name: Tag and publish release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          v=${{ steps.ver.outputs.version }}
+          v="${VERSION}"
           git tag "v${v}" || true
           git push origin "v${v}" || true
           gh release create "v${v}" --title "v${v}" \

@@ -34,7 +34,9 @@ fork or a new maintainer needs to configure them by hand:
   token is required for the release chain to actually fire.
 - **Branch protection on `main`** — require these status checks before
   merging:
-  - the reusable CI jobs from `hassio-addons/workflows` (lint/build matrix)
+  - the CI lint/build jobs in `ci.yaml` (`Gather app information`,
+    `Lint App`, `Hadolint`, `JSON Lint`, `Shellcheck`, `YAMLLint`,
+    `Prettier`, `zizmor`, `Build {arch}`)
   - `Base image pins match`
   - `Smoke test`
   - `Trivy scan`
@@ -43,6 +45,13 @@ fork or a new maintainer needs to configure them by hand:
   Add a bypass for the `RELEASE_TOKEN` identity (the user/app the PAT belongs
   to) so the automated `release:` version-bump commit and tag push in
   `release.yaml` aren't themselves blocked by the protection rule.
+
+- **Dependency graph / Dependabot alerts** — Settings → Advanced Security (or
+  `PUT /repos/<owner>/app-headscale/vulnerability-alerts` via the API) should
+  be enabled. `ci.yaml` intentionally does not run
+  `actions/dependency-review-action`, since that action 404s outright on a
+  repo where this isn't on — re-add a `dependency-review` job once it's
+  confirmed enabled.
 - **GHCR packages must be public** (or grant the Home Assistant Supervisor's
   pull path explicit read access) — `ghcr.io/<owner>/{arch}-addon-headscale`
   is pulled anonymously by installs; a private package will fail to install
@@ -51,7 +60,7 @@ fork or a new maintainer needs to configure them by hand:
   cannot track `FROM ${BUILD_FROM}` in `headscale/Dockerfile` because the tag
   is parameterized through an `ARG` rather than a literal `FROM` line —
   Dependabot only parses literal image references. The `Base image pins
-  match` CI check (`base-sync` job in `ci.yaml`) only guards against
+match` CI check (`base-sync` job in `ci.yaml`) only guards against
   `ARG BUILD_FROM` and `headscale/build.yaml` drifting apart from each other;
   it does not detect a new upstream base image release. Bumping to a newer
   `hassio-addons/base` version is a manual edit to both files.

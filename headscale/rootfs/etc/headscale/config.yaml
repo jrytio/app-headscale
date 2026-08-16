@@ -1,3 +1,4 @@
+---
 # Template — copied to /data/headscale/config.yaml on first run, patched every start
 server_url: https://REPLACE_ME
 listen_addr: 0.0.0.0:8443

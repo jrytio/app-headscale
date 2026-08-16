@@ -1,3 +1,4 @@
+---
 # Standalone test environment — no HA Supervisor, no capabilities.
 # Usage: docker compose -f docker-compose.test.yml up -d --build && ./test/smoke.sh
 services:
@@ -10,7 +11,7 @@ services:
     ports:
       - "8081:8081"     # headscale (HTTP mode)
       - "8080:8080"     # headplane direct
-      - "62000:62000"   # ingress vhost (for allowlist denial test)
+      - "8099:8099"     # ingress vhost (for allowlist denial test)
     entrypoint: ["/bin/bash", "/test/entrypoint.sh"]
     volumes:
       - headscale-data:/data

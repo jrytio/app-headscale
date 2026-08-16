@@ -1,21 +1,36 @@
 ---
 name: E2E
 
+# yamllint disable-line rule:truthy
 on:
   pull_request:
   push:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   e2e:
     name: Supervisor e2e
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Cold nested-Docker boot (devcontainer pull + in-supervisor image build
+    # from 4 uncached base images) has been observed to eat a large chunk of
+    # the previous 45m budget before the addon container even starts its
+    # health-check start-period; the warm-pull step below shrinks that, but
+    # keep a generous ceiling so a genuinely-slow (not hung) runner still
+    # gets a real diagnostics dump instead of a hard cancellation.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Free disk space
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+        with:
+          persist-credentials: false
+      - name: Free disk space + warm devcontainer image pull (parallel)
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc &
+          docker pull ghcr.io/home-assistant/devcontainer:5-apps &
+          wait
       - name: Run e2e suite
         run: ./test/e2e.sh
       - name: Diagnostics note

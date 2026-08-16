@@ -7,10 +7,8 @@ assert() { # assert <description> <command...>
   local desc="$1"; shift
   if "$@" >/dev/null 2>&1; then echo "PASS: ${desc}"; else echo "FAIL: ${desc}"; FAIL=1; fi
 }
-in_c() { docker exec "$C" "$@"; }
-
 echo "== waiting for services (max 120s) =="
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
   curl -fs http://127.0.0.1:8081/health >/dev/null 2>&1 && break
   sleep 2
 done
@@ -64,7 +62,7 @@ assert "subnet router absent when disabled (default)" \
   bash -c "! docker exec $C s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml | jq -e '.[] | select(.name==\"subnet-router\")'"
 
 assert "ingress vhost denies non-supervisor sources" \
-  bash -c "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:62000/admin/ | grep -q 403"
+  bash -c "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/admin/ | grep -q 403"
 assert "direct vhost serves headplane" \
   bash -c "curl -fs -o /dev/null http://127.0.0.1:8080/admin/login"
 assert "direct vhost strips identity headers" \

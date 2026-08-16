@@ -3,5 +3,5 @@
   "log_level": "debug",
   "acme_email": "",
   "users": ["e2etest"],
-  "subnet_router": {"enabled": true, "exit_node": false}
+  "subnet_router": { "enabled": true, "exit_node": false }
 }

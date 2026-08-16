@@ -9,18 +9,18 @@ A Home Assistant addon that bundles Headscale (self-hosted Tailscale control ser
 
 ## Decisions
 
-| Decision | Choice | Rationale |
-|---|---|---|
-| UI | Headplane (tale/headplane) | Actively maintained, Headscale 0.28 support, MIT license, SSR keeps API key server-side |
-| Scope | All-in-one (headscale + headplane + subnet router) | Simplest UX for HA users |
-| Networking | Host network + user configures DNS/port forwarding | Standard self-hosted VPN pattern |
-| TLS | Let's Encrypt via headscale built-in ACME | Zero-config TLS, user provides domain + email |
-| Subnet routes | Auto-detect LAN + user can override | Smart defaults, full flexibility |
-| ACL default | Simple allow-all | Avoids confusing new users; tighten via headplane UI |
-| UI access | HA ingress + optional direct access | Sidebar integration as primary, fallback on separate port |
-| Base image | node:22-alpine (Node.js LTS) | Headplane requires Node.js runtime; Alpine base keeps image small |
-| Process manager | s6-overlay (installed on top of node:22-alpine) | Proven HA addon pattern for managing multiple services |
-| Build pattern | Binary download (headscale + headplane from GitHub releases, tailscale from apk) | Smallest image, fastest builds, follows AdGuard Home addon pattern |
+| Decision        | Choice                                                                           | Rationale                                                                               |
+| --------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| UI              | Headplane (tale/headplane)                                                       | Actively maintained, Headscale 0.28 support, MIT license, SSR keeps API key server-side |
+| Scope           | All-in-one (headscale + headplane + subnet router)                               | Simplest UX for HA users                                                                |
+| Networking      | Host network + user configures DNS/port forwarding                               | Standard self-hosted VPN pattern                                                        |
+| TLS             | Let's Encrypt via headscale built-in ACME                                        | Zero-config TLS, user provides domain + email                                           |
+| Subnet routes   | Auto-detect LAN + user can override                                              | Smart defaults, full flexibility                                                        |
+| ACL default     | Simple allow-all                                                                 | Avoids confusing new users; tighten via headplane UI                                    |
+| UI access       | HA ingress + optional direct access                                              | Sidebar integration as primary, fallback on separate port                               |
+| Base image      | node:22-alpine (Node.js LTS)                                                     | Headplane requires Node.js runtime; Alpine base keeps image small                       |
+| Process manager | s6-overlay (installed on top of node:22-alpine)                                  | Proven HA addon pattern for managing multiple services                                  |
+| Build pattern   | Binary download (headscale + headplane from GitHub releases, tailscale from apk) | Smallest image, fastest builds, follows AdGuard Home addon pattern                      |
 
 ## Repository Structure
 
@@ -127,6 +127,7 @@ backup_exclude:
 **Base image:** `node:22-alpine` (Node.js LTS)
 
 **Layered on top:**
+
 - s6-overlay (downloaded from GitHub releases, arch-specific)
 - nginx (apk)
 - tailscale (apk)
@@ -135,6 +136,7 @@ backup_exclude:
 - headplane pre-built release (downloaded from GitHub releases)
 
 **build.yaml:**
+
 ```yaml
 build_from:
   aarch64: node:22-alpine
@@ -144,6 +146,7 @@ args:
 ```
 
 **Version pins as Dockerfile ARGs:**
+
 - `HEADSCALE_VERSION=0.28.0`
 - `HEADPLANE_VERSION=0.6.2`
 - `S6_OVERLAY_VERSION=3.2.0.2`
@@ -153,6 +156,7 @@ Note: Headplane release artifact format needs verification during implementation
 ## Service Architecture (s6-overlay)
 
 **Dependency graph:**
+
 ```
 init-headscale (oneshot)
   ├──→ headscale (longrun)
@@ -161,16 +165,16 @@ init-headscale (oneshot)
   │      └──→ init-nginx (oneshot) → nginx (longrun)
 ```
 
-| Service | Type | Description |
-|---|---|---|
-| init-headscale | oneshot | Copy default config to /data on first run. Patch server_url, ACME, DB path, ACL mode via yq. |
-| headscale | longrun | `headscale serve` on :443 (HTTPS), :3478/udp (STUN), :80 (ACME) |
-| init-headplane | oneshot | Wait for headscale ready. Generate API key (first run) or read stored key. Write headplane env. |
-| headplane | longrun | Node.js SSR on 127.0.0.1:3000. Talks to headscale via localhost. |
-| init-tailscale | oneshot | Wait for headscale. Create subnet-router user + pre-auth key. Configure tailscaled. Skip if disabled. |
-| tailscaled | longrun | tailscale daemon with --advertise-routes (auto-detect or configured) and optional --advertise-exit-node. |
-| init-nginx | oneshot | Generate nginx configs from templates. Ingress block (allow 172.30.32.2), direct access block with auth_request. |
-| nginx | longrun | Reverse proxy. Ingress → headplane:3000. Direct access on :8080 with HA auth. |
+| Service        | Type    | Description                                                                                                      |
+| -------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
+| init-headscale | oneshot | Copy default config to /data on first run. Patch server_url, ACME, DB path, ACL mode via yq.                     |
+| headscale      | longrun | `headscale serve` on :443 (HTTPS), :3478/udp (STUN), :80 (ACME)                                                  |
+| init-headplane | oneshot | Wait for headscale ready. Generate API key (first run) or read stored key. Write headplane env.                  |
+| headplane      | longrun | Node.js SSR on 127.0.0.1:3000. Talks to headscale via localhost.                                                 |
+| init-tailscale | oneshot | Wait for headscale. Create subnet-router user + pre-auth key. Configure tailscaled. Skip if disabled.            |
+| tailscaled     | longrun | tailscale daemon with --advertise-routes (auto-detect or configured) and optional --advertise-exit-node.         |
+| init-nginx     | oneshot | Generate nginx configs from templates. Ingress block (allow 172.30.32.2), direct access block with auth_request. |
+| nginx          | longrun | Reverse proxy. Ingress → headplane:3000. Direct access on :8080 with HA auth.                                    |
 
 All longrun services have finish scripts that halt the container on unexpected exit.
 
@@ -198,6 +202,7 @@ All longrun services have finish scripts that halt the container on unexpected e
 ## User Documentation (DOCS.md)
 
 Sections:
+
 1. **Prerequisites** — domain, port forwarding (443, 80, 3478), email for Let's Encrypt
 2. **Quick Start** — set server_url + acme_email, start, open sidebar UI
 3. **Connecting Clients** — per-platform tailscale up commands with --login-server

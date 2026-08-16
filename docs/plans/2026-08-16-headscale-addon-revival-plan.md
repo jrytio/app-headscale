@@ -109,10 +109,12 @@ test/e2e.sh                        # NEW supervisor-devcontainer e2e driver
 ### Task 1: Dockerfile + build.yaml — all deps as FROM stages
 
 **Files:**
+
 - Modify: `headscale/Dockerfile` (full rewrite)
 - Modify: `headscale/build.yaml`
 
 **Interfaces:**
+
 - Produces: binaries at `/usr/local/bin/headscale`, `/usr/local/bin/tailscale`, `/usr/local/bin/tailscaled`, `/usr/bin/node`; headplane at `/opt/headplane` (server entry `/opt/headplane/build/server/index.js`), agent `/usr/libexec/headplane/agent`, healthcheck `/usr/local/bin/hp_healthcheck`; system users `headscale`, `headplane`, `tailscale` (nginx user comes from the nginx apk package); dirs `/etc/nginx/servers`, `/var/run/nginx`, `/var/run/tailscale`, `/etc/headplane`.
 
 - [ ] **Step 1: Write the failing build check**
@@ -184,6 +186,7 @@ args:
 - [ ] **Step 4: Build and verify binaries**
 
 Run:
+
 ```bash
 docker build --build-arg BUILD_ARCH=aarch64 -t headscale-addon:dev headscale/ \
  && docker run --rm --entrypoint sh headscale-addon:dev -c '
@@ -198,6 +201,7 @@ docker build --build-arg BUILD_ARCH=aarch64 -t headscale-addon:dev headscale/ \
     id headscale && id headplane && id tailscale && id nginx
     test -x /usr/bin/bashio && test -x /init'
 ```
+
 Expected: `v0.29.3`, a `1.102.2` line, `v24.x`, nginx version banner, all `test`/`id` lines silent-pass, exit 0.
 
 - [ ] **Step 5: Commit**
@@ -212,11 +216,13 @@ git commit -m "feat: restructure Dockerfile — all deps as pinned FROM stages o
 ### Task 2: config.yaml, translations, AppArmor profile
 
 **Files:**
+
 - Modify: `headscale/config.yaml` (full rewrite)
 - Create: `headscale/translations/en.yaml`
 - Create: `headscale/apparmor.txt`
 
 **Interfaces:**
+
 - Produces: addon options schema (`server_url`, `log_level`, `acme_email`, `users` list, `subnet_router.enabled` default **false**, `subnet_router.exit_node`); ports map 8443→443, 8081→80, 3478→3478/udp, 8080→disabled; NO host_network / privileged / homeassistant_config. Later tasks read options via `bashio::config`.
 
 - [ ] **Step 1: Rewrite `headscale/config.yaml`**
@@ -424,10 +430,12 @@ Note: `deny network raw` in every child profile is the AppArmor expression of "n
 - [ ] **Step 4: Validate**
 
 Run:
+
 ```bash
 docker run --rm -v "$PWD/headscale":/w mikefarah/yq:4 e 'true' /w/config.yaml /w/translations/en.yaml >/dev/null && echo YAML-OK
 apparmor_parser -Q headscale/apparmor.txt 2>/dev/null || docker run --rm -v "$PWD/headscale":/w alpine:3.24 sh -c 'apk add -q apparmor-utils && apparmor_parser -Q /w/apparmor.txt' && echo APPARMOR-OK
 ```
+
 Expected: `YAML-OK` and `APPARMOR-OK` (parser syntax check only; enforcement is verified in Task 14).
 
 - [ ] **Step 5: Commit**
@@ -442,6 +450,7 @@ git commit -m "feat: bridge networking config, opt-in subnet router, translation
 ### Task 3: Standalone test harness (supervisor mock + smoke suite)
 
 **Files:**
+
 - Modify: `docker-compose.test.yml`
 - Modify: `test/entrypoint.sh`
 - Modify: `test/options.json`
@@ -450,24 +459,50 @@ git commit -m "feat: bridge networking config, opt-in subnet router, translation
 - Create: `test/smoke.sh`
 
 **Interfaces:**
+
 - Produces: `docker compose -f docker-compose.test.yml up -d --build` boots the addon standalone; `test/smoke.sh` is the assertion suite Tasks 4–10 extend (bash, `assert` helper, exits non-zero on failure); mock Supervisor reachable inside the container at `http://supervisor` (hosts-pinned to 127.0.0.1:80, served by busybox httpd). Mock values: core port **8123**, host interface `192.168.77.0/24` with address `192.168.77.10`, ingress port **62000**.
 - Consumes: image from Task 1, options schema from Task 2.
 
 - [ ] **Step 1: Write the mock Supervisor JSON files**
 
 `test/supervisor-mock/core/info`:
+
 ```json
-{"result": "ok", "data": {"version": "2026.8.1", "port": 8123, "ssl": false, "hostname": "homeassistant"}}
+{
+  "result": "ok",
+  "data": {
+    "version": "2026.8.1",
+    "port": 8123,
+    "ssl": false,
+    "hostname": "homeassistant"
+  }
+}
 ```
 
 `test/supervisor-mock/network/info` (shape matches Supervisor `/network/info`; bashio jq-filters into it):
+
 ```json
-{"result": "ok", "data": {"interfaces": [{"interface": "end0", "primary": true, "ipv4": {"address": ["192.168.77.10/24"], "gateway": "192.168.77.1"}}]}}
+{
+  "result": "ok",
+  "data": {
+    "interfaces": [
+      {
+        "interface": "end0",
+        "primary": true,
+        "ipv4": { "address": ["192.168.77.10/24"], "gateway": "192.168.77.1" }
+      }
+    ]
+  }
+}
 ```
 
 `test/supervisor-mock/addons/self/info`:
+
 ```json
-{"result": "ok", "data": {"ingress_port": 62000, "network": {"8080/tcp": 8080}}}
+{
+  "result": "ok",
+  "data": { "ingress_port": 62000, "network": { "8080/tcp": 8080 } }
+}
 ```
 
 - [ ] **Step 2: Rewrite `test/entrypoint.sh`**
@@ -485,19 +520,21 @@ exec /init
 - [ ] **Step 3: Rewrite test options + compose file**
 
 `test/options.json`:
+
 ```json
 {
   "server_url": "http://127.0.0.1",
   "log_level": "debug",
   "acme_email": "",
   "users": ["e2etest"],
-  "subnet_router": {"enabled": false, "exit_node": false}
+  "subnet_router": { "enabled": false, "exit_node": false }
 }
 ```
 
 `test/options-router.json`: identical but `"enabled": true`.
 
 `docker-compose.test.yml`:
+
 ```yaml
 # Standalone test environment — no HA Supervisor, no capabilities.
 # Usage: docker compose -f docker-compose.test.yml up -d --build && ./test/smoke.sh
@@ -509,9 +546,9 @@ services:
         BUILD_ARCH: amd64
     container_name: headscale-addon-test
     ports:
-      - "8081:8081"     # headscale (HTTP mode)
-      - "8080:8080"     # headplane direct
-      - "62000:62000"   # ingress vhost (for allowlist denial test)
+      - "8081:8081" # headscale (HTTP mode)
+      - "8080:8080" # headplane direct
+      - "62000:62000" # ingress vhost (for allowlist denial test)
     entrypoint: ["/bin/bash", "/test/entrypoint.sh"]
     volumes:
       - headscale-data:/data
@@ -522,7 +559,12 @@ services:
   # Stand-in for the internal `homeassistant` hostname (serve backend target)
   homeassistant:
     image: nginx:alpine
-    command: ["sh", "-c", "sed -i 's/listen  *80/listen 8123/' /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
+    command:
+      [
+        "sh",
+        "-c",
+        "sed -i 's/listen  *80/listen 8123/' /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'",
+      ]
 volumes:
   headscale-data:
 ```
@@ -565,11 +607,13 @@ Expected: **FAIL** — the old s6 services still target old ports/paths; that's 
 git add docker-compose.test.yml test/
 git commit -m "test: standalone harness with supervisor mock and smoke suite"
 ```
+
 ---
 
 ### Task 4: init-headscale + headscale service (bridge-mode config, /etc/hosts pin, non-root)
 
 **Files:**
+
 - Modify: `headscale/rootfs/etc/headscale/config.yaml` (template)
 - Modify: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headscale/run`
 - Modify: `headscale/rootfs/etc/s6-overlay/s6-rc.d/headscale/run`
@@ -577,6 +621,7 @@ git commit -m "test: standalone harness with supervisor mock and smoke suite"
 - Test: extend `test/smoke.sh`
 
 **Interfaces:**
+
 - Consumes: MODE-DETECT block; options from Task 2.
 - Produces: container-env vars for later services — `HS_MODE` (`tls`|`http`), `HS_LOCAL_URL` (`https://<host>:8443` | `http://127.0.0.1:8081`), `HS_LOGIN_SERVER` (public URL clients/nodes use), `HA_PORT` (from `bashio::core.port`, fallback 8123 when Supervisor unreachable — mock supplies it in tests). Headscale runs as user `headscale`, config+state at `/data/headscale/`, `headscale` CLI usable via `s6-setuidgid headscale /usr/local/bin/headscale <cmd> --config /data/headscale/config.yaml`.
 
@@ -765,12 +810,14 @@ git commit -m "feat: bridge-mode headscale on unprivileged ports, hosts-pin TLS,
 ### Task 5: init-policy — users + fail-closed seed ACL + surgical merge
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-policy/{type,up,run,dependencies.d/headscale}`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/user/contents.d/init-policy` (empty file)
 - Modify: dependencies of `init-headplane`, `init-nginx` (Task 6/9 note: their `dependencies.d/` gains `init-policy` replacing bare `headscale`)
 - Test: extend `test/smoke.sh`
 
 **Interfaces:**
+
 - Consumes: `HS_MODE`, `HA_PORT` env; running headscale.
 - Produces: headscale users exist for each `users` option entry plus service users `addon` (owns proxy/router keys) and `headplane-agent`; database policy seeded exactly as the spec's tag-based ACL; marker file `/data/headscale/.policy_seeded`. Helper convention for later tasks: `hs() { s6-setuidgid headscale /usr/local/bin/headscale --config /data/headscale/config.yaml "$@"; }`.
 
@@ -926,10 +973,12 @@ touch init-headplane/dependencies.d/init-policy init-nginx/dependencies.d/init-p
 - [ ] **Step 4: Rebuild + smoke; also verify idempotent second boot**
 
 Run:
+
 ```bash
 docker compose -f docker-compose.test.yml up -d --build --force-recreate && sleep 30 && ./test/smoke.sh \
  && docker compose -f docker-compose.test.yml restart headscale-addon && sleep 30 && ./test/smoke.sh
 ```
+
 Expected: all policy assertions PASS on both runs (second run exercises the merge path).
 
 - [ ] **Step 5: Commit**
@@ -944,12 +993,14 @@ git commit -m "feat: fail-closed tag-based seed ACL with add-only merges (init-p
 ### Task 6: init-headplane + headplane service (0.7.0 config, non-root, no secrets in logs)
 
 **Files:**
+
 - Modify: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headplane/run`
 - Modify: `headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/run`
 - Modify: `headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/finish` (CANONICAL-FINISH, `service="Headplane"`)
 - Test: extend `test/smoke.sh`
 
 **Interfaces:**
+
 - Consumes: `HS_LOCAL_URL`, `HS_LOGIN_SERVER` env; `init-policy` complete (user `headplane-agent` exists).
 - Produces: Headplane on 127.0.0.1:3000 with config at `/etc/headplane/config.yaml` (owner `headplane`, mode 0400); API key at `/data/headplane/api_key` (0600); server data at `/data/headplane/data`.
 
@@ -1077,12 +1128,14 @@ git commit -m "feat: headplane 0.7 config with server-side key, proxy auth, non-
 ### Task 7: ts-ha-proxy — serve-based HA access
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-ha-proxy/{type,up,run,dependencies.d/init-policy}`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/ts-ha-proxy/{type,run,finish,dependencies.d/init-ha-proxy}`
 - Create: `user/contents.d/init-ha-proxy`, `user/contents.d/ts-ha-proxy` (empty files)
 - Test: extend `test/smoke.sh`
 
 **Interfaces:**
+
 - Consumes: `HS_MODE`, `HS_LOGIN_SERVER`, `HA_PORT`, running headscale + seeded policy; headscale user `addon` (key owner).
 - Produces: tailnet node `homeassistant` tagged `tag:homeassistant`, serving TCP `${HA_PORT}` → `tcp://homeassistant:${HA_PORT}`; state at `/data/tailscale/ha-proxy`; socket `/var/run/tailscale/ha-proxy.sock`.
 
@@ -1187,12 +1240,14 @@ git commit -m "feat: ts-ha-proxy — tagged userspace node serving HA via tailsc
 ### Task 8: ts-subnet-router — opt-in LAN access
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-subnet-router/{type,up,run,dependencies.d/init-policy}`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/ts-subnet-router/{type,run,finish,dependencies.d/init-subnet-router}`
 - Create: `user/contents.d/init-subnet-router`, `user/contents.d/ts-subnet-router` (empty files)
 - Test: extend `test/smoke.sh`
 
 **Interfaces:**
+
 - Consumes: `TS_ROUTES` (set by init-policy), `HS_LOGIN_SERVER`, options `subnet_router.*`; headscale user `addon`.
 - Produces: when enabled — node `subnet-router` tagged `tag:subnet-router`, advertised+approved routes; when disabled — NO tailscaled process, NO node. Longrun must exit 0 immediately when disabled (s6 oneshot-like no-op via `s6-svc -O`).
 
@@ -1321,11 +1376,13 @@ Expected: disabled assert PASSES with the addon running (no `subnet-router` node
 git add headscale/rootfs test/smoke.sh
 git commit -m "feat: opt-in tagged subnet router with auto-approved detected routes"
 ```
+
 ---
 
 ### Task 9: nginx — ingress allowlist, identity-header hygiene, rate-limited direct port, non-root
 
 **Files:**
+
 - Modify: `headscale/rootfs/etc/nginx/nginx.conf`
 - Modify: `headscale/rootfs/etc/nginx/templates/ingress.gtpl`, `direct.gtpl` (`upstream.gtpl` unchanged)
 - Modify: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-nginx/run` (only the bashio rename: `bashio::app.ingress_port` / `bashio::app.port` instead of `bashio::addon.*`)
@@ -1333,6 +1390,7 @@ git commit -m "feat: opt-in tagged subnet router with auto-approved detected rou
 - Test: extend `test/smoke.sh`
 
 **Interfaces:**
+
 - Consumes: headplane upstream on 127.0.0.1:3000; ingress port from Supervisor API (mock: 62000); direct port mapping (mock: 8080).
 - Produces: ingress vhost reachable ONLY from 172.30.32.2; direct vhost with `limit_req` on auth paths and identity headers stripped.
 
@@ -1466,6 +1524,7 @@ server {
 In `init-nginx/run` replace `bashio::addon.ingress_port` → `bashio::app.ingress_port` and `bashio::addon.port 8080` → `bashio::app.port 8080` (two occurrences each in condition + assignment); everything else stays.
 
 `nginx/run`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -1494,6 +1553,7 @@ git commit -m "feat: ingress source allowlist, identity-header hygiene, rate-lim
 ### Task 10: Remove dead services, rewrite DOCS.md, CHANGELOG, README
 
 **Files:**
+
 - Delete: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale/`, `.../tailscaled/`, `user/contents.d/{init-tailscale,tailscaled}`
 - Modify: `headscale/DOCS.md` (rewrite), `headscale/CHANGELOG.md`, `README.md`
 
@@ -1506,6 +1566,7 @@ git rm -r headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale \
           headscale/rootfs/etc/s6-overlay/s6-rc.d/user/contents.d/tailscaled
 docker compose -f docker-compose.test.yml up -d --build --force-recreate && sleep 40 && ./test/smoke.sh
 ```
+
 Expected: suite stays green; `docker exec headscale-addon-test test ! -d /etc/s6-overlay/s6-rc.d/tailscaled` exits 0.
 
 - [ ] **Step 2: Prepend `headscale/CHANGELOG.md`**
@@ -1644,10 +1705,12 @@ git commit -m "docs: 0.7.0 changelog, security-model docs, remove dead tailscale
 ### Task 11: Dependabot + CI workflow
 
 **Files:**
+
 - Create: `.github/dependabot.yml`
 - Create: `.github/workflows/ci.yaml`
 
 **Interfaces:**
+
 - Produces: PR pipeline = community reusable CI (lint+build) + `base-sync` + `smoke` + `trivy` jobs. Job names later referenced by auto-merge/branch protection: `ci / information`, `ci / lint-app`, `ci / build (amd64)`, `base-sync`, `smoke`, `trivy`, `e2e` (Task 12 adds e2e).
 
 - [ ] **Step 1: Create `.github/dependabot.yml`**
@@ -1746,10 +1809,12 @@ git commit -m "ci: dependabot, community CI, base-pin sync check, smoke and triv
 ### Task 12: E2E — real Supervisor in CI
 
 **Files:**
+
 - Create: `test/e2e.sh`
 - Create: `.github/workflows/e2e.yaml` — a separate workflow file keeps CI readable; it must run on `pull_request` too so auto-merge waits on it.
 
 **Interfaces:**
+
 - Consumes: whole addon tree; devcontainer image `ghcr.io/home-assistant/devcontainer:5-apps` (fallback tag `:addons` if 5-apps is unavailable).
 - Produces: `test/e2e.sh` — exits non-zero on any scenario failure; runnable locally (`./test/e2e.sh`) and in CI.
 
@@ -1785,7 +1850,7 @@ docker run -d --name "$SUP" --privileged \
 # local addon dir must be writable (we strip image:) — copy it inside
 sup bash -c 'cp -r /mnt/supervisor/addons/local/headscale-src/headscale /mnt/supervisor/addons/local/headscale \
   && sed -i "/^image:/d" /mnt/supervisor/addons/local/headscale/config.yaml'
-sup bash -c 'supervisor_run > /tmp/supervisor.log 2>&1 &' 
+sup bash -c 'supervisor_run > /tmp/supervisor.log 2>&1 &'
 for i in $(seq 1 60); do ha supervisor info >/dev/null 2>&1 && break; sleep 5; done
 ha supervisor info >/dev/null || { bad "supervisor did not become ready"; exit 1; }
 ha jobs options --ignore-conditions healthy >/dev/null 2>&1 || true
@@ -1907,6 +1972,7 @@ git commit -m "test: supervisor-devcontainer e2e — ingress exclusivity, ACLs, 
 ### Task 13: Auto-merge, release, deploy, scheduled jobs
 
 **Files:**
+
 - Create: `.github/workflows/auto-merge.yaml`, `.github/workflows/release.yaml`, `.github/workflows/deploy.yaml`, `.github/workflows/scheduled.yaml`
 
 - [ ] **Step 1: `auto-merge.yaml`**
@@ -2129,6 +2195,7 @@ git commit -m "ci: dependabot auto-merge, auto-release on merge, GHCR deploy, we
 ```bash
 docker compose -f docker-compose.test.yml up -d --build --force-recreate && sleep 45 && ./test/smoke.sh && ./test/e2e.sh
 ```
+
 Expected: both suites fully green.
 
 - [ ] **Step 2: Security-invariant grep sweep** (the "never weaken" list from Global Constraints)
@@ -2138,6 +2205,7 @@ Expected: both suites fully green.
 ! grep -rn "privileged:" headscale/config.yaml
 grep -q "allow 172.30.32.2" headscale/rootfs/etc/nginx/templates/ingress.gtpl
 ```
+
 Expected: all exit 0.
 
 - [ ] **Step 3: Verify AppArmor on the real HA VM** (user's VM at 10.42.12.231; addon slug on that box is from the dev repo — install the branch build as a local addon or via the repo): profile loads (`ha apps info` shows AppArmor true; addon starts and functions). If the profile is rejected, apply the fallback noted in Task 2 Step 3 and re-verify.
@@ -2157,5 +2225,3 @@ Repo settings checklist from Task 13; confirm first auto-release + GHCR publish 
 1. **Spec coverage**: every spec section maps to a task — architecture/config (1–2), services (4–9), migration+docs (10), CI/CD+Dependabot+auto-merge+release (11, 13), e2e (12), AppArmor+non-root (2, 4, 6, 9), credential policy (6, 7, 8), fail-closed ACL (5). Out-of-scope items in the spec stay out.
 2. **Placeholders**: none — every file's full content is in its task; action SHAs are flagged for resolution at implementation, which is a verification step, not a gap.
 3. **Type/name consistency**: env vars `HS_MODE`/`HS_LOCAL_URL`/`HS_LOGIN_SERVER`/`HA_PORT`/`TS_ROUTES` defined in Task 4/5, consumed in 5–9; `hs()` helper convention identical across scripts; state dirs `/data/tailscale/ha-proxy` + `/data/tailscale/subnet-router`; sockets `ha-proxy.sock`/`subnet-router.sock`; users `addon`/`headplane-agent`; tags `tag:homeassistant`/`tag:subnet-router`.
-
-
