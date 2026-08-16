@@ -1,0 +1,100 @@
+#include <tunables/global>
+
+profile headscale flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  capability chown,
+  capability dac_override,
+  capability setgid,
+  capability setuid,
+  capability kill,
+  capability net_bind_service,
+
+  network tcp,
+  network udp,
+  network unix,
+
+  file,
+  /** mrwkl,
+
+  # s6-overlay
+  /init ix,
+  /run/{s6,s6-rc*,service}/** ix,
+  /package/** ix,
+  /command/** ix,
+
+  # Service binaries
+  /usr/local/bin/headscale cx -> headscale,
+  /usr/local/bin/tailscaled cx -> tailscaled,
+  /usr/bin/node cx -> headplane,
+  /usr/sbin/nginx cx -> nginx,
+
+  deny mount,
+  deny umount,
+  deny /sys/[^f]*/** wklx,
+  deny /proc/sys/kernel/** wklx,
+
+  profile headscale flags=(attach_disconnected,mediate_deleted) {
+    #include <abstractions/base>
+    network tcp,
+    network udp,
+    /usr/local/bin/headscale r,
+    /data/headscale/** rwk,
+    /data/headscale/ rw,
+    /etc/hosts r,
+    /etc/resolv.conf r,
+    /etc/ssl/** r,
+    owner /tmp/** rwk,
+    deny network raw,
+  }
+
+  profile tailscaled flags=(attach_disconnected,mediate_deleted) {
+    #include <abstractions/base>
+    network tcp,
+    network udp,
+    network unix,
+    /usr/local/bin/tailscaled r,
+    /usr/local/bin/tailscale rix,
+    /data/tailscale/** rwk,
+    /var/run/tailscale/** rwk,
+    /etc/hosts r,
+    /etc/resolv.conf r,
+    /etc/ssl/** r,
+    owner /tmp/** rwk,
+    deny network raw,
+  }
+
+  profile headplane flags=(attach_disconnected,mediate_deleted) {
+    #include <abstractions/base>
+    network tcp,
+    network unix,
+    /usr/bin/node r,
+    /opt/headplane/** r,
+    /usr/libexec/headplane/agent rix,
+    /etc/headplane/** r,
+    /data/headplane/** rwk,
+    /data/headscale/config.yaml r,
+    /etc/hosts r,
+    /etc/resolv.conf r,
+    /etc/ssl/** r,
+    owner /tmp/** rwk,
+    deny network raw,
+  }
+
+  profile nginx flags=(attach_disconnected,mediate_deleted) {
+    #include <abstractions/base>
+    capability net_bind_service,
+    capability setgid,
+    capability setuid,
+    network tcp,
+    network unix,
+    /usr/sbin/nginx r,
+    /etc/nginx/** r,
+    /var/run/nginx/** rwk,
+    /var/lib/nginx/** rwk,
+    /var/log/nginx/** rw,
+    /proc/1/fd/* w,
+    owner /tmp/** rwk,
+    deny network raw,
+  }
+}

@@ -1,0 +1,33 @@
+---
+configuration:
+  server_url:
+    name: Server URL
+    description: >-
+      Public URL clients use to reach this Headscale server, e.g.
+      https://vpn.example.com. With an https URL, a real domain, and an ACME
+      email set, TLS certificates are obtained automatically.
+  log_level:
+    name: Log level
+    description: Verbosity of the Headscale server log.
+  acme_email:
+    name: ACME email
+    description: >-
+      Email address for Let's Encrypt registration. Leave empty to run
+      without TLS (only sensible for testing or when server_url is an IP).
+  users:
+    name: Tailnet users
+    description: >-
+      Headscale user accounts to create automatically. Generate device keys
+      for them in the Headplane UI. Users added here are also added to
+      group:users in the access policy (never removed automatically).
+  subnet_router:
+    name: Subnet router
+    description: >-
+      Optional LAN access for tailnet devices. Disabled by default — enabling
+      it advertises your Home Assistant host's network to the tailnet, gated
+      by the group:subnet-access ACL group (empty by default).
+network:
+  8443/tcp: Headscale server (HTTPS)
+  8081/tcp: Let's Encrypt challenge / HTTP mode
+  3478/udp: STUN relay
+  8080/tcp: Headplane direct access (bypasses Home Assistant auth)

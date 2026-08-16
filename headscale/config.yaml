@@ -1,5 +1,5 @@
 name: Headscale
-version: 0.6.0
+version: 0.7.0
 slug: headscale
 description: Self-hosted Tailscale control server with web UI
 url: https://github.com/josh/app-headscale
@@ -12,38 +12,39 @@ arch:
   - aarch64
   - amd64
 init: false
-host_network: true
+image: ghcr.io/josh/{arch}-addon-headscale
 ports:
-  443/tcp: 443
-  80/tcp: 80
+  8443/tcp: 443
+  8081/tcp: 80
   3478/udp: 3478
   8080/tcp: null
 ports_description:
-  443/tcp: Headscale server (HTTPS)
-  80/tcp: Let's Encrypt certificate challenge
+  8443/tcp: Headscale server (HTTPS) — forward router port 443 here
+  8081/tcp: Let's Encrypt challenge / HTTP mode — forward router port 80 here
   3478/udp: STUN relay
-  8080/tcp: Headplane web UI (not required for Ingress)
-auth_api: true
+  8080/tcp: Headplane direct access (bypasses Home Assistant auth — leave disabled unless you need it)
 hassio_api: true
 map:
   - ssl
-  - homeassistant_config:ro
-privileged:
-  - NET_ADMIN
-  - NET_RAW
 options:
   server_url: ""
   log_level: info
   acme_email: ""
+  users: []
   subnet_router:
-    enabled: true
+    enabled: false
     exit_node: false
 schema:
   server_url: url
   log_level: list(trace|debug|info|warning|error)
   acme_email: "email?"
+  users:
+    - str
   subnet_router:
     enabled: bool
     exit_node: bool
 backup_exclude:
   - "*/headscale/noise_private.key"
+  - "*/headscale/derp_server_private.key"
+  - "*/headplane/api_key"
+  - "*/headplane/cookie_secret"
