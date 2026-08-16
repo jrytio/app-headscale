@@ -37,7 +37,7 @@ options:
 schema:
   server_url: url
   log_level: list(trace|debug|info|warning|error)
-  acme_email: "email?"
+  acme_email: "str?"
   users:
     - str
   subnet_router:

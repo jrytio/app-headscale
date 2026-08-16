@@ -1,0 +1,23 @@
+---
+name: E2E
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  e2e:
+    name: Supervisor e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Free disk space
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+      - name: Run e2e suite
+        run: ./test/e2e.sh
+      - name: Supervisor logs on failure
+        if: failure()
+        run: docker exec hassio-e2e cat /tmp/supervisor.log | tail -200 || true
