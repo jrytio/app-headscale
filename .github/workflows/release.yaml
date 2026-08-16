@@ -6,6 +6,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -47,4 +51,5 @@ jobs:
           git tag "v${v}" || true
           git push origin "v${v}" || true
           gh release create "v${v}" --title "v${v}" \
-            --notes "$(awk '/^## /{n++} n==1' headscale/CHANGELOG.md)" || true
+            --notes "$(awk '/^## /{n++} n==1' headscale/CHANGELOG.md)" || \
+            gh release view "v${v}" >/dev/null

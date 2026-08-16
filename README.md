@@ -9,7 +9,7 @@ This addon runs with **no** host networking and **no** privileged capabilities. 
 ## Installation
 
 1. In Home Assistant, go to **Settings** → **Add-ons** → **Add-on Store** → **⋮** (menu) → **Repositories**
-2. Add this repository: `https://github.com/josh/app-headscale`
+2. Add this repository: `https://github.com/jrytio/app-headscale`
 3. Go to **Headscale** and click **Install**
 
 ## Documentation

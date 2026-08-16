@@ -2,7 +2,7 @@ name: Headscale
 version: 0.7.0
 slug: headscale
 description: Self-hosted Tailscale control server with web UI
-url: https://github.com/josh/app-headscale
+url: https://github.com/jrytio/app-headscale
 ingress: true
 ingress_port: 0
 panel_icon: mdi:vpn
@@ -12,7 +12,7 @@ arch:
   - aarch64
   - amd64
 init: false
-image: ghcr.io/josh/{arch}-addon-headscale
+image: ghcr.io/jrytio/{arch}-addon-headscale
 ports:
   8443/tcp: 443
   8081/tcp: 80
