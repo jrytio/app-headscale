@@ -1,13 +1,17 @@
 # Home Assistant Addon: Headscale
 
-Self-hosted Tailscale control server with Headplane web UI and optional subnet router.
+Self-hosted Tailscale control server with the Headplane web UI, a built-in tailnet proxy for reaching Home Assistant, and an optional subnet router.
 
-## About
+## Security First
 
-This addon runs [Headscale](https://github.com/juanfont/headscale) (a self-hosted Tailscale control server), [Headplane](https://github.com/tale/headplane) (a web management UI), and an optional Tailscale subnet router for accessing your home network remotely.
+This addon runs with **no** host networking and **no** privileged capabilities. Every service runs as a separate non-root user under a custom AppArmor profile. A compromise of the exposed headscale service is contained to the container, not your home network. Backups contain your tailnet state and should be treated as sensitive.
 
 ## Installation
 
-Add this repository to your Home Assistant addon store, then install the Headscale addon.
+1. In Home Assistant, go to **Settings** → **Add-ons** → **Add-on Store** → **⋮** (menu) → **Repositories**
+2. Add this repository: `https://github.com/josh/app-headscale`
+3. Go to **Headscale** and click **Install**
 
-See the [documentation](headscale/DOCS.md) for setup instructions.
+## Documentation
+
+See [headscale/DOCS.md](headscale/DOCS.md) for full setup instructions, configuration options, and troubleshooting.
