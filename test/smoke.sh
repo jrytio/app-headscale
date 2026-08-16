@@ -91,6 +91,16 @@ assert "subnet router joins with tag and approved route" \
   bash -c "docker exec ${C}-router s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml | jq -e '.[] | select(.name==\"subnet-router\") | (.tags // [] | index(\"tag:subnet-router\")) or (.forcedTags // [] | index(\"tag:subnet-router\")) or (.validTags // [] | index(\"tag:subnet-router\"))'"
 assert "route 192.168.77.0/24 approved" \
   bash -c "docker exec ${C}-router s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml | jq -e '[.[].approved_routes // []] | flatten | index(\"192.168.77.0/24\")'"
+assert "no preauthkey values in router logs" \
+  bash -c "! docker logs ${C}-router 2>&1 | grep -E 'hskey-auth-[A-Za-z0-9_-]{40,}'"
+
+# Phase 2 teardown: remove router node and state for idempotency
+ROUTER_NODE_ID=$(docker exec ${C}-router s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml 2>/dev/null | jq -r '.[] | select(.name=="subnet-router") | .id' 2>/dev/null || echo "")
+if [ -n "$ROUTER_NODE_ID" ]; then
+  docker exec ${C}-router s6-setuidgid headscale headscale nodes delete -i "$ROUTER_NODE_ID" --force --config /data/headscale/config.yaml >/dev/null 2>&1 || true
+fi
+docker exec ${C}-router rm -rf /data/tailscale/subnet-router >/dev/null 2>&1 || true
+
 docker stop "${C}-router" >/dev/null 2>&1 || true
 docker compose -f docker-compose.test.yml up -d >/dev/null 2>&1
 
