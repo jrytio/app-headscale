@@ -14,6 +14,7 @@ TS_PID=$!
 trap 'kill ${TS_PID} 2>/dev/null; wait' EXIT TERM
 
 for i in $(seq 1 30); do [ -S "${SOCKET}" ] && break; sleep 1; done
+[ -S "${SOCKET}" ] || bashio::log.warning "Timed out waiting for socket: ${SOCKET}"
 
 # In-container nodes must log in against headscale's LOCAL listener, not the
 # public HS_LOGIN_SERVER: in HTTP test mode HS_LOGIN_SERVER is
@@ -41,6 +42,8 @@ if [ -f "${KEY_FILE}" ]; then
 fi
 if timeout 60 s6-setuidgid tailscale /usr/local/bin/tailscale --socket="${SOCKET}" up "${up_args[@]}"; then
     rm -f "${KEY_FILE}"
+    touch "${STATE_DIR}/.joined"
+    chown tailscale:tailscale "${STATE_DIR}/.joined"
     bashio::log.info "HA proxy node is on the tailnet."
     # Forward the tailnet-side HA port to Home Assistant. Backend hostname
     # 'homeassistant' resolves on the internal hassio network (mocked in tests).
@@ -51,6 +54,9 @@ if timeout 60 s6-setuidgid tailscale /usr/local/bin/tailscale --socket="${SOCKET
         bashio::log.warning "tailscale serve setup failed — HA not reachable via tailnet."
     fi
 else
+    # The key may have been consumed or gone stale — drop it so the next
+    # boot's init-ha-proxy mints a fresh one instead of retrying a dead key.
+    rm -f "${KEY_FILE}"
     bashio::log.warning "HA proxy could not join the tailnet (will retry on restart)."
 fi
 

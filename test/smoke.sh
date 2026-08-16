@@ -48,8 +48,16 @@ assert "api key value never appears in logs" \
   bash -c "! docker logs $C 2>&1 | grep -qF \"\$(docker exec $C cat /data/headplane/api_key)\""
 
 assert "ha-proxy node joined with tag:homeassistant" \
-  bash -c "docker exec $C s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml | jq -e '.[] | select(.name==\"homeassistant\") | .validTags==null or (.tags // [] | index(\"tag:homeassistant\")) or (.forcedTags // [] | index(\"tag:homeassistant\"))'"
+  bash -c "docker exec $C s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml | jq -e '.[] | select(.name==\"homeassistant\") | (.tags // [] | index(\"tag:homeassistant\")) or (.forcedTags // [] | index(\"tag:homeassistant\")) or (.validTags // [] | index(\"tag:homeassistant\"))'"
 assert "serve forwards HA_PORT" \
   bash -c "docker exec $C tailscale --socket /var/run/tailscale/ha-proxy.sock serve status | grep -q 8123"
+# NOTE: headscale v0.29.3 preauthkeys are NOT 48 hex chars — they are
+# "hskey-auth-" + a 77-char mixed-case/digit/underscore/hyphen token (88
+# chars total, observed consistently across several minted keys during
+# testing). A plain hex regex false-positived on tailscaled's LogID lines
+# (64 hex chars, logged routinely and unrelated to auth), so match the
+# actual key shape instead.
+assert "no preauthkey values in logs" \
+  bash -c "! docker logs $C 2>&1 | grep -E 'hskey-auth-[A-Za-z0-9_-]{40,}'"
 
 exit $FAIL

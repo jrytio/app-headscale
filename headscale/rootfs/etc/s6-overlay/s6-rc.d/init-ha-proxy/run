@@ -1,6 +1,8 @@
 #!/command/with-contenv bashio
 # shellcheck shell=bash
-# Mints a single-use tagged join key for the HA proxy node when no state exists.
+# Mints a single-use tagged join key for the HA proxy node when it has not
+# yet successfully joined the tailnet (see the .joined marker written by
+# ts-ha-proxy/run on a successful `tailscale up`).
 readonly STATE_DIR="/data/tailscale/ha-proxy"
 readonly KEY_FILE="/tmp/ha-proxy-join-key"
 
@@ -9,7 +11,7 @@ hs() { s6-setuidgid headscale /usr/local/bin/headscale --config /data/headscale/
 mkdir -p "${STATE_DIR}" /var/run/tailscale
 chown -R tailscale:tailscale "${STATE_DIR}" /var/run/tailscale
 
-if [ ! -f "${STATE_DIR}/tailscaled.state" ]; then
+if [ ! -f "${STATE_DIR}/.joined" ]; then
     addon_uid=$(hs users list -o json 2>/dev/null | jq -r '.[] | select(.name=="addon") | .id') || true
     if bashio::var.has_value "${addon_uid}"; then
         # Default expiry 1h, single-use, tagged — never logged, never persisted.
