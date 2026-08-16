@@ -1,75 +1,85 @@
 #!/command/with-contenv bashio
 # shellcheck shell=bash
-# ==============================================================================
-# Home Assistant Addon: Headscale
-# Configures Headscale server
-# ==============================================================================
+# Configures Headscale: bridge-mode ports, TLS/HTTP mode, hosts pin, migration.
 readonly CONFIG="/data/headscale/config.yaml"
 readonly DEFAULT_CONFIG="/etc/headscale/config.yaml"
 
 bashio::log.info "Configuring Headscale..."
 
-# First run: copy default config
 if ! bashio::fs.file_exists "${CONFIG}"; then
-    bashio::log.info "First run detected, creating default configuration..."
+    bashio::log.info "First run: creating default configuration..."
     mkdir -p /data/headscale/cache
     cp "${DEFAULT_CONFIG}" "${CONFIG}"
 fi
 
-# Read addon options
-server_url=$(bashio::config 'server_url')
-acme_email=$(bashio::config 'acme_email')
-log_level=$(bashio::config 'log_level')
-
-# Validate required options
-if ! bashio::var.has_value "${server_url}"; then
-    bashio::log.fatal "server_url is required. Set it to your public domain (e.g., https://vpn.example.com)"
-    bashio::exit.nok
+# --- v0.6.0 migration: old TUN node + old subnet router state are obsolete ---
+if [ -d /data/tailscale/ha ] || [ -d /data/tailscale/subnet ]; then
+    bashio::log.notice "Migrating from v0.6.x: removing old tailscale node state."
+    bashio::log.notice "Clients that used the old homeassistant tailnet IP should"
+    bashio::log.notice "switch to homeassistant.tailnet.internal (see documentation)."
+    rm -rf /data/tailscale/ha /data/tailscale/subnet
+    rm -rf /data/headplane/user_keys /data/headplane/ha_users.txt \
+           /data/tailscale/ha_auth_key /data/tailscale/subnet_auth_key \
+           /data/headplane/agent_preauth_key
 fi
 
-# Patch config with addon options
-server_url="${server_url}" \
-    yq e --inplace '.server_url = env(server_url)' "${CONFIG}"
+server_url=$(bashio::config 'server_url')
+if ! bashio::var.has_value "${server_url}"; then
+    bashio::log.fatal "server_url is required (e.g. https://vpn.example.com)"
+    bashio::exit.nok
+fi
+log_level=$(bashio::config 'log_level')
+acme_email=$(bashio::config 'acme_email')
 
-log_level="${log_level}" \
-    yq e --inplace '.log.level = env(log_level)' "${CONFIG}"
-
-# Determine if we should use TLS
-# TLS requires: HTTPS URL + a real hostname (not an IP) + ACME email
-acme_hostname=$(echo "${server_url}" | sed 's|https://||' | sed 's|http://||' | sed 's|/.*||' | sed 's|:.*||')
-
-if [[ "${server_url}" == https://* ]] && [[ ! "${acme_hostname}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && bashio::var.has_value "${acme_email}"; then
-    # HTTPS with a real domain — enable ACME TLS
-    bashio::log.info "TLS enabled with ACME for ${acme_hostname}"
-    acme_hostname="${acme_hostname}" \
-        yq e --inplace '.tls_letsencrypt_hostname = env(acme_hostname)' "${CONFIG}"
-    acme_email="${acme_email}" \
-        yq e --inplace '.acme_email = env(acme_email)' "${CONFIG}"
-    yq e --inplace '.listen_addr = "0.0.0.0:443"' "${CONFIG}"
+# MODE-DETECT
+hs_host=$(echo "${server_url}" | sed -e 's|https\?://||' -e 's|[:/].*||')
+if [[ "${server_url}" == https://* ]] \
+    && [[ ! "${hs_host}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    && bashio::var.has_value "${acme_email}"; then
+    hs_mode=tls; hs_local_url="https://${hs_host}:8443"
+    bashio::log.info "TLS enabled with ACME for ${hs_host}"
+    acme_hostname="${hs_host}" yq e --inplace '.tls_letsencrypt_hostname = env(acme_hostname)' "${CONFIG}"
+    acme_email="${acme_email}" yq e --inplace '.acme_email = env(acme_email)' "${CONFIG}"
+    yq e --inplace '.listen_addr = "0.0.0.0:8443"' "${CONFIG}"
+    # Pin the public hostname to loopback so in-container clients (headplane,
+    # tailscaled) reach headscale locally with a VALID cert — no TLS bypass.
+    if ! grep -q " ${hs_host}\$" /etc/hosts; then
+        echo "127.0.0.1 ${hs_host}" >> /etc/hosts
+    fi
 else
-    # HTTP or IP address — disable TLS, listen on port 80
-    bashio::log.info "TLS disabled (no valid domain for ACME). Using HTTP on port 80."
+    hs_mode=http; hs_local_url="http://127.0.0.1:8081"
+    bashio::log.info "TLS disabled (no domain/email for ACME). HTTP on port 80 (container 8081)."
     yq e --inplace '.tls_letsencrypt_hostname = ""' "${CONFIG}"
-    yq e --inplace '.listen_addr = "0.0.0.0:80"' "${CONFIG}"
-    # Ensure server_url uses http:// to match
+    yq e --inplace '.listen_addr = "0.0.0.0:8081"' "${CONFIG}"
     if [[ "${server_url}" == https://* ]]; then
-        server_url="http://${acme_hostname}"
-        server_url="${server_url}" \
-            yq e --inplace '.server_url = env(server_url)' "${CONFIG}"
-        bashio::log.warning "Rewrote server_url to ${server_url} (ACME unavailable for IP addresses)"
+        server_url="http://${hs_host}"
+        bashio::log.warning "Rewrote server_url to ${server_url} (ACME unavailable)"
     fi
 fi
 
-# Ensure critical settings
+server_url="${server_url}" yq e --inplace '.server_url = env(server_url)' "${CONFIG}"
+log_level="${log_level}" yq e --inplace '.log.level = env(log_level)' "${CONFIG}"
 yq e --inplace '.metrics_listen_addr = "127.0.0.1:9090"' "${CONFIG}"
-yq e --inplace '.database.type = "sqlite"' "${CONFIG}"
 yq e --inplace '.database.sqlite.path = "/data/headscale/db.sqlite"' "${CONFIG}"
-yq e --inplace '.noise.private_key_path = "/data/headscale/noise_private.key"' "${CONFIG}"
 yq e --inplace '.policy.mode = "database"' "${CONFIG}"
-# Ensure all DNS fields exist (headplane requires them)
+yq e --inplace '.dns.base_domain = "tailnet.internal"' "${CONFIG}"
 yq e --inplace '.dns.nameservers.split |= (. // {})' "${CONFIG}"
 yq e --inplace '.dns.search_domains |= (. // [])' "${CONFIG}"
 yq e --inplace '.dns.extra_records |= (. // [])' "${CONFIG}"
 
-bashio::log.info "Headscale configuration complete."
-bashio::log.info "Server URL: ${server_url}"
+# HA core port for the serve proxy + seed ACL (mock supplies it in tests)
+ha_port=$(bashio::core.port 2>/dev/null) || true
+[ -z "${ha_port}" ] || [ "${ha_port}" = "null" ] && ha_port=8123
+
+chown -R headscale:headscale /data/headscale
+
+# Default unix control-socket dir is root-owned; headscale runs as non-root.
+mkdir -p /var/run/headscale
+chown headscale:headscale /var/run/headscale
+
+printf '%s' "${hs_mode}"      > /var/run/s6/container_environment/HS_MODE
+printf '%s' "${hs_local_url}" > /var/run/s6/container_environment/HS_LOCAL_URL
+printf '%s' "${server_url}"   > /var/run/s6/container_environment/HS_LOGIN_SERVER
+printf '%s' "${ha_port}"      > /var/run/s6/container_environment/HA_PORT
+
+bashio::log.info "Headscale configured (mode=${hs_mode}, server_url=${server_url})"

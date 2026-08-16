@@ -191,8 +191,9 @@ EOF2
     bashio::log.info "Headplane agent integration enabled."
 fi
 
-# Set NODE_TLS_REJECT_UNAUTHORIZED=0 so headplane can talk to
-# headscale over HTTPS on localhost (cert is for the public domain)
-printf '%s' "0" > /var/run/s6/container_environment/NODE_TLS_REJECT_UNAUTHORIZED
+# Disabled pending Task 5 rewrite: this addon now runs bridge-mode headscale
+# with a hosts-pin (valid cert, no TLS bypass needed) or plain HTTP — the old
+# unconditional NODE_TLS_REJECT_UNAUTHORIZED=0 no longer applies either way.
+bashio::log.info "NODE_TLS_REJECT_UNAUTHORIZED bypass disabled pending rewrite."
 
 bashio::log.info "Headplane configuration complete."

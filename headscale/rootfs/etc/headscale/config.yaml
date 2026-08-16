@@ -1,16 +1,15 @@
-# Patched by init-headscale on every start
+# Template — copied to /data/headscale/config.yaml on first run, patched every start
 server_url: https://REPLACE_ME
-listen_addr: 0.0.0.0:443
+listen_addr: 0.0.0.0:8443
 metrics_listen_addr: 127.0.0.1:9090
 
 noise:
   private_key_path: /data/headscale/noise_private.key
 
-# ACME / Let's Encrypt — patched by init-headscale
 tls_letsencrypt_hostname: ""
 tls_letsencrypt_cache_dir: /data/headscale/cache
 tls_letsencrypt_challenge_type: HTTP-01
-tls_letsencrypt_listen: ":80"
+tls_letsencrypt_listen: ":8081"
 
 database:
   type: sqlite
@@ -35,7 +34,7 @@ prefixes:
 
 dns:
   magic_dns: true
-  base_domain: headscale.local
+  base_domain: tailnet.internal
   override_local_dns: false
   nameservers:
     global:

@@ -17,4 +17,13 @@ done
 
 assert "headscale /health responds"        curl -fs http://127.0.0.1:8081/health
 
+assert "config: listen_addr is 0.0.0.0:8081 (HTTP mode)" \
+  bash -c "docker exec $C yq e '.listen_addr' /data/headscale/config.yaml | grep -q '0.0.0.0:8081'"
+assert "config: base_domain is tailnet.internal" \
+  bash -c "docker exec $C yq e '.dns.base_domain' /data/headscale/config.yaml | grep -q 'tailnet.internal'"
+assert "headscale runs as non-root" \
+  bash -c "docker exec $C ps -o user,comm | grep headscale | grep -qv root"
+assert "no NODE_TLS_REJECT_UNAUTHORIZED in container env" \
+  bash -c "! docker exec $C test -e /var/run/s6/container_environment/NODE_TLS_REJECT_UNAUTHORIZED"
+
 exit $FAIL
