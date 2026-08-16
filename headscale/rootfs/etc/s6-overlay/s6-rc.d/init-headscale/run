@@ -21,6 +21,10 @@ if [ -d /data/tailscale/ha ] || [ -d /data/tailscale/subnet ]; then
     rm -rf /data/headplane/user_keys /data/headplane/ha_users.txt \
            /data/tailscale/ha_auth_key /data/tailscale/subnet_auth_key \
            /data/headplane/agent_preauth_key
+    bashio::log.notice "If you customized your ACL policy, add rules targeting the new tags, e.g.:"
+    bashio::log.notice '  {"action": "accept", "src": ["group:users"], "dst": ["tag:homeassistant:*"]}'
+    bashio::log.notice '  {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:homeassistant:8123"]}'
+    bashio::log.notice "(replace 8123 with your Home Assistant port; rules for the old 'ha' host are now inert)"
 fi
 
 server_url=$(bashio::config 'server_url')

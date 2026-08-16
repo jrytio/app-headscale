@@ -14,9 +14,7 @@ Security-focused re-architecture. **Breaking changes — read before upgrading:*
   Re-enable it in the addon options if you used it.
 - The `users` addon option replaces automatic Home Assistant user import;
   the addon no longer reads your HA configuration directory.
-- Existing custom ACL policies are kept untouched; the addon logs the
-  tag-based rules you should add. Fresh installs get a least-privilege
-  policy automatically.
+- Existing ACL policies are preserved with add-only updates: users listed in the addon option are merged into `group:users` (nothing is ever removed), and a `group:subnet-access` route rule is added when the subnet router is first enabled. Policies that aren't plain JSON (e.g. HuJSON with comments) are never modified — the addon logs a warning and leaves them untouched. Upgraders from 0.6.x: rules targeting the old `ha` host point at a removed node; add rules targeting `tag:homeassistant` instead (the addon log shows the exact rules on first boot after upgrade). Fresh installs get a least-privilege policy automatically.
 - Headscale 0.28.0 → 0.29.3 (database migrates automatically; clients need
   Tailscale ≥ 1.80). Headplane 0.6.2-beta.5 → 0.7.0 (fixes CVE-2026-46484).
 - Web UI: log in via Home Assistant ingress — sessions now come from your
