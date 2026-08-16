@@ -47,4 +47,9 @@ assert "api key file exists with 0600" \
 assert "api key value never appears in logs" \
   bash -c "! docker logs $C 2>&1 | grep -qF \"\$(docker exec $C cat /data/headplane/api_key)\""
 
+assert "ha-proxy node joined with tag:homeassistant" \
+  bash -c "docker exec $C s6-setuidgid headscale headscale nodes list -o json --config /data/headscale/config.yaml | jq -e '.[] | select(.name==\"homeassistant\") | .validTags==null or (.tags // [] | index(\"tag:homeassistant\")) or (.forcedTags // [] | index(\"tag:homeassistant\"))'"
+assert "serve forwards HA_PORT" \
+  bash -c "docker exec $C tailscale --socket /var/run/tailscale/ha-proxy.sock serve status | grep -q 8123"
+
 exit $FAIL

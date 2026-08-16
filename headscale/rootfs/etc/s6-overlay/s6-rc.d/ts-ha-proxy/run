@@ -1,0 +1,57 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+readonly STATE_DIR="/data/tailscale/ha-proxy"
+readonly SOCKET="/var/run/tailscale/ha-proxy.sock"
+readonly KEY_FILE="/tmp/ha-proxy-join-key"
+
+bashio::log.info "Starting HA proxy tailscale node..."
+
+s6-setuidgid tailscale /usr/local/bin/tailscaled \
+    --statedir="${STATE_DIR}" \
+    --socket="${SOCKET}" \
+    --tun=userspace-networking &
+TS_PID=$!
+trap 'kill ${TS_PID} 2>/dev/null; wait' EXIT TERM
+
+for i in $(seq 1 30); do [ -S "${SOCKET}" ] && break; sleep 1; done
+
+# In-container nodes must log in against headscale's LOCAL listener, not the
+# public HS_LOGIN_SERVER: in HTTP test mode HS_LOGIN_SERVER is
+# "http://127.0.0.1" with no port, which resolves to port 80 inside this
+# container — the Supervisor mock httpd, not headscale (headscale listens on
+# 8081 in HTTP mode / 8443 in TLS mode). init-headscale already computes the
+# correct same-container target as HS_LOCAL_URL
+# (http://127.0.0.1:8081 | https://<hs_host>:8443, the latter resolving via
+# the /etc/hosts loopback pin) — use it, with a defensive re-derivation from
+# HS_MODE if it's ever unset.
+login_server="${HS_LOCAL_URL:-}"
+if ! bashio::var.has_value "${login_server}"; then
+    if [ "${HS_MODE}" = "tls" ]; then
+        hs_host=$(echo "${HS_LOGIN_SERVER}" | sed -e 's|https\?://||' -e 's|[:/].*||')
+        login_server="https://${hs_host}:8443"
+    else
+        login_server="http://127.0.0.1:8081"
+    fi
+    bashio::log.warning "HS_LOCAL_URL unset — derived local login server: ${login_server}"
+fi
+
+up_args=(--login-server "${login_server}" --hostname homeassistant --accept-dns=false --accept-routes=false)
+if [ -f "${KEY_FILE}" ]; then
+    up_args+=(--authkey "$(cat "${KEY_FILE}")")
+fi
+if timeout 60 s6-setuidgid tailscale /usr/local/bin/tailscale --socket="${SOCKET}" up "${up_args[@]}"; then
+    rm -f "${KEY_FILE}"
+    bashio::log.info "HA proxy node is on the tailnet."
+    # Forward the tailnet-side HA port to Home Assistant. Backend hostname
+    # 'homeassistant' resolves on the internal hassio network (mocked in tests).
+    if s6-setuidgid tailscale /usr/local/bin/tailscale --socket="${SOCKET}" \
+        serve --bg --tcp="${HA_PORT}" "tcp://homeassistant:${HA_PORT}"; then
+        bashio::log.info "Serving Home Assistant at homeassistant.tailnet.internal:${HA_PORT}"
+    else
+        bashio::log.warning "tailscale serve setup failed — HA not reachable via tailnet."
+    fi
+else
+    bashio::log.warning "HA proxy could not join the tailnet (will retry on restart)."
+fi
+
+wait ${TS_PID}
