@@ -1,5 +1,25 @@
 #include <tunables/global>
 
+# Flat profile — no nested/child sub-profiles, no cx transitions.
+#
+# A previous revision confined headscale/tailscaled/headplane/nginx in their
+# own nested child profiles (cx -> <name>) for tighter per-service isolation.
+# Two rounds of targeted fixes to that shape (adding `network unix,` to the
+# missing child, and adding /run/{,**} rwk, for s6-overlay's internal
+# s6rc-oneshot-runner dispatcher) both left the addon crash-looping under
+# Supervisor's REAL AppArmor enforcement with the exact same denial
+# ("s6-ipcserver-socketbinder: fatal: unable to create socket: Permission
+# denied", every init-* oneshot blocked forever) — even though the nested
+# profile's syntax is valid and Supervisor's slug-rename step (which only
+# rewrites the single unindented top-level `profile NAME` line, verified
+# against supervisor/utils/apparmor.py's adjust_profile()) does not mangle
+# it. Rather than keep guessing at nested-profile/enforcement interactions
+# that can't be reproduced locally (this kernel has no AppArmor LSM at all),
+# this profile trades per-service domain separation for the flat,
+# single-profile shape most community add-ons use, which is known-compatible
+# with Supervisor's loader. The meaningful restrictions (no raw sockets, no
+# mount/umount, no writes under most of /sys and /proc/sys/kernel, minimal
+# capability set) are preserved as a union across all four services below.
 profile headscale flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
 
@@ -13,6 +33,7 @@ profile headscale flags=(attach_disconnected,mediate_deleted) {
   network tcp,
   network udp,
   network unix,
+  deny network raw,
 
   file,
   /** mrwkl,
@@ -26,91 +47,53 @@ profile headscale flags=(attach_disconnected,mediate_deleted) {
   # unix socket under a randomized /run/s6-rc:<id>/servicedirs/** path via
   # s6-ipcserver-socketbinder — every init-* oneshot depends on it. This is
   # the same rule the upstream hassio-supervisor profile and the official
-  # s6-overlay-v3 migration guidance grant for /run (see
-  # developers.home-assistant.io s6-overlay-base-images blog post); our own
-  # broader /** mrwkl below is not a reliable substitute for it in practice.
+  # s6-overlay-v3 migration guidance grant for /run.
   /run/{,**} rwk,
 
-  # Service binaries
-  /usr/local/bin/headscale cx -> headscale,
-  /usr/local/bin/tailscaled cx -> tailscaled,
-  /usr/bin/node cx -> headplane,
-  /usr/sbin/nginx cx -> nginx,
+  # Service binaries — plain exec, inherit this same (only) profile.
+  /usr/local/bin/headscale rix,
+  /usr/local/bin/tailscaled rix,
+  /usr/local/bin/tailscale rix,
+  /usr/bin/node rix,
+  /usr/sbin/nginx rix,
+  /usr/libexec/headplane/agent rix,
+
+  # headscale
+  /data/headscale/** rwk,
+  /data/headscale/ rw,
+  /run/headscale/ rw,
+  /run/headscale/** rwk,
+  /var/run/headscale/ rw,
+  /var/run/headscale/** rwk,
+
+  # tailscaled (ha-proxy + subnet-router nodes)
+  /data/tailscale/** rwk,
+  /run/tailscale/** rwk,
+  /var/run/tailscale/** rwk,
+
+  # headplane
+  /opt/headplane/** r,
+  /etc/headplane/** r,
+  /data/headplane/** rwk,
+  /proc/ r,
+  /proc/** r,
+
+  # nginx
+  /etc/nginx/** r,
+  /run/nginx/** rwk,
+  /var/run/nginx/** rwk,
+  /var/lib/nginx/** rwk,
+  /var/log/nginx/** rw,
+  /proc/1/fd/* w,
+
+  # common
+  /etc/hosts r,
+  /etc/resolv.conf r,
+  /etc/ssl/** r,
+  owner /tmp/** rwk,
 
   deny mount,
   deny umount,
   deny /sys/[^f]*/** wklx,
   deny /proc/sys/kernel/** wklx,
-
-  profile headscale flags=(attach_disconnected,mediate_deleted) {
-    #include <abstractions/base>
-    network tcp,
-    network udp,
-    network unix,
-    /usr/local/bin/headscale rm,
-    /data/headscale/** rwk,
-    /data/headscale/ rw,
-    /run/headscale/ rw,
-    /run/headscale/** rwk,
-    /var/run/headscale/ rw,
-    /var/run/headscale/** rwk,
-    /etc/hosts r,
-    /etc/resolv.conf r,
-    /etc/ssl/** r,
-    owner /tmp/** rwk,
-    deny network raw,
-  }
-
-  profile tailscaled flags=(attach_disconnected,mediate_deleted) {
-    #include <abstractions/base>
-    network tcp,
-    network udp,
-    network unix,
-    /usr/local/bin/tailscaled rm,
-    /usr/local/bin/tailscale rix,
-    /data/tailscale/** rwk,
-    /run/tailscale/** rwk,
-    /var/run/tailscale/** rwk,
-    /etc/hosts r,
-    /etc/resolv.conf r,
-    /etc/ssl/** r,
-    owner /tmp/** rwk,
-    deny network raw,
-  }
-
-  profile headplane flags=(attach_disconnected,mediate_deleted) {
-    #include <abstractions/base>
-    network tcp,
-    network unix,
-    /usr/bin/node rm,
-    /opt/headplane/** r,
-    /usr/libexec/headplane/agent rix,
-    /etc/headplane/** r,
-    /data/headplane/** rwk,
-    /data/headscale/config.yaml r,
-    /etc/hosts r,
-    /etc/resolv.conf r,
-    /etc/ssl/** r,
-    /proc/ r,
-    /proc/** r,
-    owner /tmp/** rwk,
-    deny network raw,
-  }
-
-  profile nginx flags=(attach_disconnected,mediate_deleted) {
-    #include <abstractions/base>
-    capability setgid,
-    capability setuid,
-    network tcp,
-    network unix,
-    /usr/sbin/nginx rm,
-    /etc/nginx/** r,
-    /run/nginx/** rwk,
-    /var/run/nginx/** rwk,
-    /var/lib/nginx/** rwk,
-    /var/log/nginx/** rw,
-    /proc/1/fd/* w,
-    owner /tmp/** rwk,
-    deny network raw,
-  }
 }

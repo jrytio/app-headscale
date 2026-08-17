@@ -169,6 +169,14 @@ dump_diagnostics() {
     fi
     echo "--- docker ps -a (inside supervisor) ---"
     sup docker ps -a 2>&1 || echo "(docker ps -a failed)"
+    # AppArmor denials land in the kernel ring buffer, not in any container's
+    # own log — $SUP, supervisor, and the addon all share the runner's real
+    # kernel (nested Docker-in-Docker, no actual nested virtualization), so
+    # `dmesg` from inside the --privileged $SUP container sees the same
+    # buffer the host would. Best-effort only: dmesg_restrict or a missing
+    # CAP_SYSLOG makes this legitimately unavailable in some environments.
+    echo "--- dmesg | grep -i apparmor (best effort) ---"
+    sup dmesg 2>&1 | grep -i apparmor || echo "(dmesg unavailable or no apparmor lines)"
   else
     echo "(supervisor container $SUP does not exist — nothing to dump)"
   fi
