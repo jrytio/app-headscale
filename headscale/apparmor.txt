@@ -36,6 +36,10 @@ profile headscale flags=(attach_disconnected,mediate_deleted) {
 
   capability chown,
   capability dac_override,
+  # init oneshots (root) chmod files after chown-ing them to service users —
+  # mode changes on files you don't own require fowner (+ fsetid companion).
+  capability fowner,
+  capability fsetid,
   capability setgid,
   capability setuid,
   capability kill,
