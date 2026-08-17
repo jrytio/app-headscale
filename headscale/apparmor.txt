@@ -54,7 +54,15 @@ profile headscale flags=(attach_disconnected,mediate_deleted) {
   # loaded and working in this exact devcontainer per the supervisor log),
   # which uses the identical "network unix stream," form.
   network unix stream,
-  deny network raw,
+  # tailscaled's netmon reads the routing table via an AF_NETLINK SOCK_RAW
+  # socket ("netlinkrib: permission denied" without this). A blanket
+  # "deny network raw," also swallowed netlink — deny the sniffing-capable
+  # families precisely instead.
+  network netlink raw,
+  network netlink dgram,
+  deny network packet,
+  deny network inet raw,
+  deny network inet6 raw,
 
   file,
   /** mrwkl,
