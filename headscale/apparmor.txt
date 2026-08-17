@@ -1,3 +1,14 @@
+# Pin the policy ABI to 3.0. The Supervisor compiles this file at runtime
+# with the apparmor_parser inside its own container, which can be older than
+# the host kernel's AppArmor (observed: Ubuntu 24.04 runners, AppArmor 4.x).
+# Policy compiled without fine-grained af_unix support on such kernels gets
+# unix sockets denied with info="failed protocol match" no matter what
+# network/unix rules the text declares — which crash-loops s6-overlay's own
+# s6-ipcserver-socketbinder. abi/3.0 tells the kernel to use coarse
+# (network-rule) mediation for socket classes this policy predates, on every
+# kernel, regardless of which parser compiled it.
+abi <abi/3.0>,
+
 #include <tunables/global>
 
 # Flat profile — no nested/child sub-profiles, no cx transitions.
