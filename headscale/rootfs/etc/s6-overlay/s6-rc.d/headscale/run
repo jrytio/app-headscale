@@ -1,10 +1,4 @@
 #!/command/with-contenv bashio
 # shellcheck shell=bash
-# ==============================================================================
-# Home Assistant Addon: Headscale
-# Runs the Headscale server
-# ==============================================================================
-
 bashio::log.info "Starting Headscale server..."
-
-exec headscale serve --config /data/headscale/config.yaml
+exec s6-setuidgid headscale /usr/local/bin/headscale serve --config /data/headscale/config.yaml

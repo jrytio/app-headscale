@@ -1,0 +1,128 @@
+# Pin the policy ABI to 3.0. The Supervisor compiles this file at runtime
+# with the apparmor_parser inside its own container, which can be older than
+# the host kernel's AppArmor (observed: Ubuntu 24.04 runners, AppArmor 4.x).
+# Policy compiled without fine-grained af_unix support on such kernels gets
+# unix sockets denied with info="failed protocol match" no matter what
+# network/unix rules the text declares — which crash-loops s6-overlay's own
+# s6-ipcserver-socketbinder. abi/3.0 tells the kernel to use coarse
+# (network-rule) mediation for socket classes this policy predates, on every
+# kernel, regardless of which parser compiled it.
+abi <abi/3.0>,
+
+#include <tunables/global>
+
+# Flat profile — no nested/child sub-profiles, no cx transitions.
+#
+# A previous revision confined headscale/tailscaled/headplane/nginx in their
+# own nested child profiles (cx -> <name>) for tighter per-service isolation.
+# Two rounds of targeted fixes to that shape (adding `network unix,` to the
+# missing child, and adding /run/{,**} rwk, for s6-overlay's internal
+# s6rc-oneshot-runner dispatcher) both left the addon crash-looping under
+# Supervisor's REAL AppArmor enforcement with the exact same denial
+# ("s6-ipcserver-socketbinder: fatal: unable to create socket: Permission
+# denied", every init-* oneshot blocked forever) — even though the nested
+# profile's syntax is valid and Supervisor's slug-rename step (which only
+# rewrites the single unindented top-level `profile NAME` line, verified
+# against supervisor/utils/apparmor.py's adjust_profile()) does not mangle
+# it. Rather than keep guessing at nested-profile/enforcement interactions
+# that can't be reproduced locally (this kernel has no AppArmor LSM at all),
+# this profile trades per-service domain separation for the flat,
+# single-profile shape most community add-ons use, which is known-compatible
+# with Supervisor's loader. The meaningful restrictions (no raw sockets, no
+# mount/umount, no writes under most of /sys and /proc/sys/kernel, minimal
+# capability set) are preserved as a union across all four services below.
+profile headscale flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  capability chown,
+  capability dac_override,
+  # init oneshots (root) chmod files after chown-ing them to service users —
+  # mode changes on files you don't own require fowner (+ fsetid companion).
+  capability fowner,
+  capability fsetid,
+  capability setgid,
+  capability setuid,
+  capability kill,
+  capability net_bind_service,
+
+  network tcp,
+  network udp,
+  # Bare "network unix," is not enough on this runner's kernel/parser: the
+  # AVC denial it produces is "failed protocol match" on family=unix
+  # sock_type=stream — the type qualifier is required. Confirmed against the
+  # live hassio-supervisor profile (version.home-assistant.io/apparmor.txt,
+  # loaded and working in this exact devcontainer per the supervisor log),
+  # which uses the identical "network unix stream," form.
+  network unix stream,
+  # tailscaled's netmon reads the routing table via an AF_NETLINK SOCK_RAW
+  # socket ("netlinkrib: permission denied" without this). A blanket
+  # "deny network raw," also swallowed netlink — deny the sniffing-capable
+  # families precisely instead.
+  network netlink raw,
+  network netlink dgram,
+  deny network packet,
+  deny network inet raw,
+  deny network inet6 raw,
+
+  file,
+  /** mrwkl,
+
+  # s6-overlay
+  /init ix,
+  /run/{s6,s6-rc*,service}/** ix,
+  /package/** ix,
+  /command/** ix,
+  # s6-rc's internal oneshot dispatcher (s6rc-oneshot-runner) binds a control
+  # unix socket under a randomized /run/s6-rc:<id>/servicedirs/** path via
+  # s6-ipcserver-socketbinder — every init-* oneshot depends on it. This is
+  # the same rule the upstream hassio-supervisor profile and the official
+  # s6-overlay-v3 migration guidance grant for /run.
+  /run/{,**} rwk,
+
+  # Service binaries — plain exec, inherit this same (only) profile.
+  /usr/local/bin/headscale rix,
+  /usr/local/bin/tailscaled rix,
+  /usr/local/bin/tailscale rix,
+  /usr/bin/node rix,
+  /usr/sbin/nginx rix,
+  /usr/libexec/headplane/agent rix,
+
+  # headscale
+  /data/headscale/** rwk,
+  /data/headscale/ rw,
+  /run/headscale/ rw,
+  /run/headscale/** rwk,
+  /var/run/headscale/ rw,
+  /var/run/headscale/** rwk,
+
+  # tailscaled (ha-proxy + subnet-router nodes)
+  /data/tailscale/** rwk,
+  /run/tailscale/** rwk,
+  /var/run/tailscale/** rwk,
+
+  # headplane
+  /opt/headplane/** r,
+  /etc/headplane/** r,
+  /data/headplane/** rwk,
+  /proc/ r,
+  /proc/** r,
+
+  # nginx
+  /etc/nginx/** r,
+  /run/nginx/** rwk,
+  /var/run/nginx/** rwk,
+  /var/lib/nginx/** rwk,
+  /var/log/nginx/** rw,
+  /proc/1/fd/* w,
+
+  # common
+  /etc/hosts r,
+  /etc/resolv.conf r,
+  /etc/ssl/** r,
+  owner /tmp/** rwk,
+
+  deny mount,
+  deny umount,
+  deny /sys/[^f]*/** wklx,
+  deny /proc/sys/kernel/** wklx,
+}

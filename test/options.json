@@ -1,10 +1,7 @@
 {
-  "server_url": "https://localhost",
+  "server_url": "http://127.0.0.1",
   "log_level": "debug",
-  "acme_email": "test@example.com",
-  "subnet_router": {
-    "enabled": false,
-    "routes": [],
-    "exit_node": false
-  }
+  "acme_email": "",
+  "users": ["e2etest"],
+  "subnet_router": { "enabled": false, "exit_node": false }
 }

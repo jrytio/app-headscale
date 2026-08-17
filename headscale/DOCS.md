@@ -1,180 +1,89 @@
 # Headscale
 
-Self-hosted Tailscale control server with Headplane web UI and optional subnet router.
+Self-hosted Tailscale control server with the Headplane web UI, a built-in
+tailnet proxy for reaching Home Assistant, and an optional subnet router.
+
+## Security model (read this)
+
+- This addon exposes headscale to the internet (ports 443/80/3478). It runs
+  with **no** host networking and **no** privileged capabilities, under a
+  custom AppArmor profile, with every service as a separate non-root user —
+  a compromise of the exposed service is contained to the container.
+- Whoever controls the headscale server controls your tailnet (headscale
+  has no Tailnet Lock). Keep the addon updated — dependency updates with
+  CVE fixes are released automatically.
+- **Backups contain your tailnet state** (the headscale database, including
+  device keys). Treat backup files as sensitive.
+- The access policy is least-privilege by default: tailnet members can only
+  reach Home Assistant; LAN access requires both enabling the subnet router
+  AND adding users to `group:subnet-access` in the policy.
 
 ## Prerequisites
 
-Before installing this addon, you need:
+1. A domain name pointing at your public IP (e.g. `vpn.example.com`)
+2. Router port forwards: `443/tcp`, `80/tcp`, `3478/udp` → Home Assistant
+3. An email address for Let's Encrypt
 
-1. **A domain name** pointing to your Home Assistant instance's public IP address (e.g., `vpn.example.com`)
-2. **Port forwarding** configured on your router:
-   - `443/tcp` — Headscale HTTPS server (client connections)
-   - `80/tcp` — Let's Encrypt ACME certificate challenge
-   - `3478/udp` — STUN relay for NAT traversal
-3. **An email address** for Let's Encrypt certificate registration
+## Quick start
 
-## Quick Start
+1. Set `server_url` (e.g. `https://vpn.example.com`) and `acme_email`
+2. Add your user names to `users` (e.g. `- josh`)
+3. Start the addon; open **Headscale** in the sidebar — you're logged in
+   through your Home Assistant session
+4. In Headplane, create a pre-auth key for your user and connect a device:
+   `tailscale up --login-server https://vpn.example.com --authkey <key>`
+5. Reach Home Assistant from anywhere at
+   `http(s)://homeassistant.tailnet.internal:<your HA port>`
 
-1. Install the addon from the Home Assistant addon store
-2. Open the **Configuration** tab and set:
-   - `server_url`: Your public domain (e.g., `https://vpn.example.com`)
-   - `acme_email`: Your email for Let's Encrypt
-3. Click **Start**
-4. Open **Headscale** from the Home Assistant sidebar
-5. Create your first user and generate a pre-auth key
+## Reaching Home Assistant
 
-## Connecting Clients
+The addon runs a tailnet node named `homeassistant` that forwards your HA
+port (detected automatically) to Home Assistant. Any tailnet member can
+reach it by default; edit `group:users` / the ACL in Headplane to restrict.
 
-After creating a user and pre-auth key in the Headplane UI, use the key to connect devices.
+## Subnet router (optional, off by default)
 
-### Linux / macOS
+Enabling `subnet_router.enabled` advertises your LAN to the tailnet — but
+no device can use it until you add users to `group:subnet-access` in the
+ACL (Headplane → Access Control). `exit_node: true` additionally offers
+full-internet routing through your home connection.
 
-```bash
-tailscale up --login-server https://vpn.example.com --authkey YOUR_AUTH_KEY
-```
+## Users and access control
 
-### Windows
+- `users` option: headscale accounts created automatically and added to
+  `group:users` (full access to the Home Assistant node). Removing a name
+  from the option does NOT delete the user or their access — manage that
+  in Headplane.
+- Groups in the default policy: `group:admins` (everything, empty by
+  default), `group:users` (HA node), `group:subnet-access` (LAN, empty by
+  default). Tags: `tag:homeassistant` (the HA proxy), `tag:subnet-router`.
 
-1. Open the Tailscale GUI
-2. Right-click the Tailscale icon in the system tray
-3. Hold **Ctrl** and click **Log out** (if already connected to Tailscale)
-4. Open a terminal (PowerShell or CMD) and run:
+## Direct web UI access (advanced)
 
-```powershell
-tailscale up --login-server https://vpn.example.com --authkey YOUR_AUTH_KEY
-```
+The web UI normally requires your Home Assistant login. Mapping host port
+8080 exposes it directly WITHOUT Home Assistant authentication (Headplane's
+API-key login only, rate-limited). Leave it disabled unless you need it.
+To log in there, use the API key from `/data/headplane/api_key` (addon
+shell: Settings → Add-ons → Headscale → ⋮ → open terminal).
 
-### iOS
+## API key rotation
 
-1. Install the Tailscale app from the App Store
-2. Open the app, tap the menu (three dots)
-3. Tap **Use an alternate server** (you may need to tap multiple times on the version number to enable this)
-4. Enter your server URL: `https://vpn.example.com`
-5. Follow the prompts and enter your auth key when asked
-
-### Android
-
-1. Install the Tailscale app from Google Play
-2. Open the app, tap the menu (three dots)
-3. Tap **Use an alternate server**
-4. Enter your server URL: `https://vpn.example.com`
-5. Follow the prompts and enter your auth key when asked
-
-## Subnet Router
-
-The built-in subnet router lets you access your home network from anywhere through your Tailscale VPN.
-
-### How It Works
-
-When enabled, the addon runs a Tailscale client that advertises your local network routes to all connected devices. This means any device connected to your Headscale VPN can reach devices on your home network (printers, NAS, cameras, etc.) as if they were local.
-
-### Configuration
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `subnet_router.enabled` | `true` | Enable or disable the subnet router |
-| `subnet_router.routes` | `[]` (auto-detect) | List of CIDR routes to advertise. Empty = auto-detect your LAN |
-| `subnet_router.exit_node` | `false` | Advertise as an exit node (routes ALL traffic through your home network) |
-
-### Auto-Detection
-
-When `routes` is empty (the default), the addon automatically detects your Home Assistant host's local network subnet (e.g., `192.168.1.0/24`) and advertises it.
-
-### Custom Routes
-
-To advertise specific routes, add them to the configuration:
-
-```yaml
-subnet_router:
-  enabled: true
-  routes:
-    - "192.168.1.0/24"
-    - "10.0.0.0/24"
-  exit_node: false
-```
-
-### Exit Node
-
-Setting `exit_node: true` advertises this addon as an exit node, meaning connected clients can route ALL their internet traffic through your home network. This is useful for accessing geo-restricted content or securing traffic on public WiFi.
-
-### Verifying Routes
-
-After connecting a client, verify the subnet router is working:
-
-```bash
-tailscale status
-```
-
-You should see `ha-subnet-router` listed with the advertised routes. Try pinging a device on your home network from a remote client.
-
-## Managing Your Network
-
-The Headplane web UI (accessible from the Home Assistant sidebar) provides full management of your Headscale network:
-
-- **Users**: Create and manage user accounts. Each person or role should have their own user.
-- **Pre-Auth Keys**: Generate authentication keys for connecting new devices. Keys can be single-use or reusable, with configurable expiration.
-- **Devices**: View all connected devices, their IP addresses, online status, and last seen time. Rename or remove devices as needed.
-- **ACL Policies**: Configure access control rules to restrict which devices can communicate with each other. The default policy allows all devices to communicate freely.
-- **Routes**: View and manage advertised routes from subnet routers and exit nodes.
-- **DNS**: Configure DNS settings for your Tailscale network.
-
-## Configuration Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `server_url` | URL | (required) | Public URL for your Headscale server (e.g., `https://vpn.example.com`) |
-| `acme_email` | Email | (required) | Email for Let's Encrypt certificate registration |
-| `log_level` | Select | `info` | Log verbosity: `trace`, `debug`, `info`, `warning`, `error` |
-| `subnet_router.enabled` | Boolean | `true` | Enable the built-in subnet router |
-| `subnet_router.routes` | List | `[]` | CIDR routes to advertise (empty = auto-detect LAN) |
-| `subnet_router.exit_node` | Boolean | `false` | Advertise as an exit node |
-
-## Network Ports
-
-| Port | Protocol | Purpose |
-|------|----------|---------|
-| 443 | TCP | Headscale HTTPS server — client connections and API |
-| 80 | TCP | ACME HTTP-01 challenge for Let's Encrypt |
-| 3478 | UDP | STUN relay for NAT traversal |
-| 8080 | TCP | Headplane web UI direct access (optional, not needed for Ingress) |
+The addon holds a long-lived headscale API key for Headplane. To rotate:
+delete `/data/headplane/api_key` and restart the addon — a fresh key is
+generated and Headplane reconfigured automatically. (Expire the old key in
+Headplane → Settings → API keys, or `headscale apikeys expire`.)
 
 ## Troubleshooting
 
-### Certificate Issues
-
-**"ACME challenge failed"**
-- Ensure port 80 is forwarded to your HA instance
-- Verify your domain resolves to your public IP: `nslookup vpn.example.com`
-- Wait a few minutes for DNS propagation if you just created the record
-
-**"TLS handshake error"**
-- The certificate may still be provisioning. Check the addon logs and wait up to 2 minutes.
-
-### Clients Can't Connect
-
-**"connection refused" or timeout**
-- Verify port 443 is forwarded to your HA instance
-- Check that `server_url` in the addon config matches your domain exactly
-- Ensure you're using `--login-server` flag with the full URL including `https://`
-
-**"invalid auth key"**
-- Keys expire. Generate a new pre-auth key in the Headplane UI.
-- Ensure you're copying the full key (they can be long)
-
-### Subnet Router Not Working
-
-**Routes not visible to clients**
-- Routes need to be approved in the Headplane UI under the device's route settings
-- Check that the subnet router shows as online in `tailscale status`
-- Verify `NET_ADMIN` and `NET_RAW` capabilities are enabled (they are by default in the addon config)
-
-**Can't reach home network devices**
-- Ensure the auto-detected or configured routes match your actual LAN subnet
-- Check that the target device allows connections from the Tailscale IP range (100.64.0.0/10)
-
-### Checking Logs
-
-View addon logs from the Home Assistant UI:
-1. Go to **Settings** -> **Add-ons** -> **Headscale**
-2. Click the **Log** tab
-3. Set `log_level` to `debug` in the addon configuration for more detailed output
+- **ACME/certificate errors**: check port 80 forwarding and DNS; the addon
+  falls back to HTTP-only when ACME is impossible (IP server_url or no
+  email) — fine for testing, not production.
+- **Client can't connect**: verify 443 forwarding and that `server_url`
+  matches exactly (including scheme).
+- **`homeassistant.tailnet.internal` doesn't resolve**: the client must
+  accept MagicDNS (default on most platforms). The node's tailnet IP from
+  Headplane works as a fallback.
+- **Subnet routes not working**: routes must be approved (automatic for
+  the built-in router) and the user must be in `group:subnet-access`.
+- **Upgrading from 0.6.x**: see the changelog — the old HA tailnet IP is
+  gone; use `homeassistant.tailnet.internal`.

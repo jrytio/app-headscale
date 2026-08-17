@@ -17,7 +17,7 @@ bashio::var.json \
         -out /etc/nginx/servers/upstream.conf
 
 # Generate ingress config
-ingress_port=$(bashio::addon.ingress_port)
+ingress_port=$(bashio::app.ingress_port)
 bashio::log.info "Ingress port: ${ingress_port}"
 bashio::var.json \
     port "^${ingress_port}" \
@@ -25,12 +25,16 @@ bashio::var.json \
         -template /etc/nginx/templates/ingress.gtpl \
         -out /etc/nginx/servers/ingress.conf
 
-# Generate direct access config
-if bashio::var.has_value "$(bashio::addon.port 8080)"; then
-    direct_port=$(bashio::addon.port 8080)
-    bashio::log.info "Direct access enabled on port ${direct_port}"
+# Generate direct access config. bashio::app.port only tells us whether the
+# user has this port mapped (and to what HOST port) — it must NOT be used as
+# the listen port here. Under bridge networking the Supervisor forwards
+# host_port -> container_port 8080, so nginx inside the container must always
+# listen on the fixed container-side port 8080 regardless of what host port
+# it's mapped to.
+if bashio::var.has_value "$(bashio::app.port 8080)"; then
+    bashio::log.info "Direct access enabled (container port 8080)"
     bashio::var.json \
-        port "^${direct_port}" \
+        port "^8080" \
         | tempio \
             -template /etc/nginx/templates/direct.gtpl \
             -out /etc/nginx/servers/direct.conf

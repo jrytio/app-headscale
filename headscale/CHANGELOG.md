@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0
+
+Security-focused re-architecture. **Breaking changes — read before upgrading:**
+
+- The addon no longer uses host networking or any privileged capabilities.
+  An attacker compromising the (internet-facing) headscale service no longer
+  lands in your host network.
+- Home Assistant is now reached at `homeassistant.tailnet.internal` on your
+  HA port (via a built-in tailnet proxy node) instead of the old node's
+  tailnet IP. Update bookmarks/apps accordingly.
+- The subnet router is now **disabled by default** (LAN access is opt-in).
+  Re-enable it in the addon options if you used it.
+- The `users` addon option replaces automatic Home Assistant user import;
+  the addon no longer reads your HA configuration directory.
+- Existing ACL policies are preserved with add-only updates: users listed in the addon option are merged into `group:users` (nothing is ever removed), and a `group:subnet-access` route rule is added when the subnet router is first enabled. Policies that aren't plain JSON (e.g. HuJSON with comments) are never modified — the addon logs a warning and leaves them untouched. Upgraders from 0.6.x: rules targeting the old `ha` host point at a removed node; add rules targeting `tag:homeassistant` instead (the addon log shows the exact rules on first boot after upgrade). Fresh installs get a least-privilege policy automatically.
+- Headscale 0.28.0 → 0.29.3 (database migrates automatically; clients need
+  Tailscale ≥ 1.80). Headplane 0.6.2-beta.5 → 0.7.0 (fixes CVE-2026-46484).
+- Web UI: log in via Home Assistant ingress — sessions now come from your
+  HA login (proxy auth). The API key is no longer printed to the log.
+
 ## 0.1.4
 
 - Fix: trailing newlines in s6 container environment files broke tailscale routes

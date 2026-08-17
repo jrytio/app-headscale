@@ -5,8 +5,11 @@
 # Runs the Nginx reverse proxy
 # ==============================================================================
 
-# Wait for headplane to become available
 bashio::net.wait_for 3000 127.0.0.1 300
-
 bashio::log.info "Starting Nginx..."
+# Master starts as root (needed to open /proc/1/fd/1 for logging and to
+# manage worker processes); nginx's own compiled-in --user=nginx default
+# drops all worker processes -- which do 100% of request parsing/proxying
+# for untrusted network input -- to the unprivileged nginx user.
+mkdir -p /var/run/nginx && chown -R nginx:nginx /var/run/nginx /var/lib/nginx
 exec nginx -c /etc/nginx/nginx.conf

@@ -14,14 +14,14 @@
 
 ## Port Architecture
 
-| Port | Process | Purpose |
-|------|---------|---------|
-| 443/tcp | headscale | HTTPS API + client connections (ACME TLS) |
-| 80/tcp | headscale | ACME HTTP-01 challenge |
-| 3478/udp | headscale | STUN relay |
-| 3000/tcp | headplane | Web UI (localhost only) |
-| ingress (dynamic) | nginx | HA sidebar access → headplane |
-| 8080/tcp (optional) | nginx | Direct web access → headplane with HA auth |
+| Port                | Process   | Purpose                                    |
+| ------------------- | --------- | ------------------------------------------ |
+| 443/tcp             | headscale | HTTPS API + client connections (ACME TLS)  |
+| 80/tcp              | headscale | ACME HTTP-01 challenge                     |
+| 3478/udp            | headscale | STUN relay                                 |
+| 3000/tcp            | headplane | Web UI (localhost only)                    |
+| ingress (dynamic)   | nginx     | HA sidebar access → headplane              |
+| 8080/tcp (optional) | nginx     | Direct web access → headplane with HA auth |
 
 Headplane connects to headscale at `https://127.0.0.1:443` with `NODE_TLS_REJECT_UNAUTHORIZED=0` (safe, same container).
 
@@ -30,6 +30,7 @@ Headplane connects to headscale at `https://127.0.0.1:443` with `NODE_TLS_REJECT
 ### Task 1: Create directory scaffold
 
 **Files:**
+
 - Create: `headscale/config.yaml`
 - Create: `headscale/build.yaml`
 - Create: `headscale/Dockerfile`
@@ -48,6 +49,7 @@ mkdir -p headscale/rootfs/etc/{headscale,nginx/templates,s6-overlay/s6-rc.d/{use
 **Step 2: Create placeholder files**
 
 Create `headscale/CHANGELOG.md`:
+
 ```markdown
 # Changelog
 
@@ -59,6 +61,7 @@ Create `headscale/CHANGELOG.md`:
 Create `LICENSE.md` with MIT license.
 
 Create `README.md`:
+
 ```markdown
 # Home Assistant Addon: Headscale
 
@@ -86,12 +89,14 @@ git add -A && git commit -m "chore: scaffold addon directory structure"
 ### Task 2: Addon metadata — config.yaml and build.yaml
 
 **Files:**
+
 - Create: `headscale/config.yaml`
 - Create: `headscale/build.yaml`
 
 **Step 1: Write config.yaml**
 
 Create `headscale/config.yaml`:
+
 ```yaml
 name: Headscale
 version: dev
@@ -150,6 +155,7 @@ backup_exclude:
 **Step 2: Write build.yaml**
 
 Create `headscale/build.yaml`:
+
 ```yaml
 build_from:
   aarch64: node:22-alpine
@@ -169,11 +175,13 @@ git add headscale/config.yaml headscale/build.yaml && git commit -m "feat: add a
 ### Task 3: Dockerfile
 
 **Files:**
+
 - Create: `headscale/Dockerfile`
 
 **Step 1: Write the Dockerfile**
 
 Create `headscale/Dockerfile`:
+
 ```dockerfile
 # Stage 1: Extract bashio + tempio from HA community base
 FROM ghcr.io/hassio-addons/base:20.0.1 AS hassio-base
@@ -254,6 +262,7 @@ git add headscale/Dockerfile && git commit -m "feat: add multi-stage Dockerfile"
 ### Task 4: Default headscale config template
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/headscale/config.yaml`
 
 **Step 1: Write the default headscale config**
@@ -261,6 +270,7 @@ git add headscale/Dockerfile && git commit -m "feat: add multi-stage Dockerfile"
 This template gets copied to `/data/headscale/config.yaml` on first run. Fields marked with comments are patched by `init-headscale` on every start.
 
 Create `headscale/rootfs/etc/headscale/config.yaml`:
+
 ```yaml
 # Patched by init-headscale on every start
 server_url: https://REPLACE_ME
@@ -322,6 +332,7 @@ git add headscale/rootfs/etc/headscale/config.yaml && git commit -m "feat: add d
 ### Task 5: s6 init-headscale oneshot service
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headscale/type`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headscale/up`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headscale/run`
@@ -330,22 +341,27 @@ git add headscale/rootfs/etc/headscale/config.yaml && git commit -m "feat: add d
 **Step 1: Write the service definition files**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headscale/type`:
+
 ```
 oneshot
 ```
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headscale/up`:
+
 ```
 /etc/s6-overlay/s6-rc.d/init-headscale/run
 ```
 
 Create empty dependency marker `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headscale/dependencies.d/base`:
+
 ```
+
 ```
 
 **Step 2: Write the init script**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headscale/run`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -412,6 +428,7 @@ bashio::log.info "ACME hostname: ${acme_hostname}"
 **Step 3: Make run script executable in Dockerfile**
 
 Note: The Dockerfile `COPY rootfs /` preserves permissions. Ensure the run script is `chmod +x` before building. Add this to the Dockerfile after `COPY rootfs /`:
+
 ```dockerfile
 RUN chmod +x /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/finish 2>/dev/null || true
 ```
@@ -427,6 +444,7 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headscale/ && git commit -m
 ### Task 6: s6 headscale longrun service
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/headscale/type`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/headscale/run`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/headscale/finish`
@@ -435,6 +453,7 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headscale/ && git commit -m
 **Step 1: Write service definition**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/headscale/type`:
+
 ```
 longrun
 ```
@@ -444,6 +463,7 @@ Create empty `headscale/rootfs/etc/s6-overlay/s6-rc.d/headscale/dependencies.d/i
 **Step 2: Write run script**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/headscale/run`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -460,6 +480,7 @@ exec headscale serve --config /data/headscale/config.yaml
 **Step 3: Write finish script**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/headscale/finish`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -500,6 +521,7 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/headscale/ && git commit -m "fea
 ### Task 7: s6 init-headplane oneshot service
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headplane/type`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headplane/up`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headplane/run`
@@ -508,11 +530,13 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/headscale/ && git commit -m "fea
 **Step 1: Write service definition**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headplane/type`:
+
 ```
 oneshot
 ```
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headplane/up`:
+
 ```
 /etc/s6-overlay/s6-rc.d/init-headplane/run
 ```
@@ -522,6 +546,7 @@ Create empty `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headplane/dependencie
 **Step 2: Write init script**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headplane/run`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -585,6 +610,7 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headplane/ && git commit -m
 ### Task 8: s6 headplane longrun service
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/type`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/run`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/finish`
@@ -593,6 +619,7 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/init-headplane/ && git commit -m
 **Step 1: Write service definition**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/type`:
+
 ```
 longrun
 ```
@@ -602,6 +629,7 @@ Create empty `headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/dependencies.d/i
 **Step 2: Write run script**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/run`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -620,6 +648,7 @@ exec node build/server/index.js
 **Step 3: Write finish script** (same pattern as headscale)
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/finish`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -660,6 +689,7 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/ && git commit -m "fea
 ### Task 9: s6 init-tailscale oneshot service
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale/type`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale/up`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale/run`
@@ -668,11 +698,13 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/headplane/ && git commit -m "fea
 **Step 1: Write service definition**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale/type`:
+
 ```
 oneshot
 ```
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale/up`:
+
 ```
 /etc/s6-overlay/s6-rc.d/init-tailscale/run
 ```
@@ -682,6 +714,7 @@ Create empty `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale/dependencie
 **Step 2: Write init script**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale/run`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -779,6 +812,7 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale/ && git commit -m
 ### Task 10: s6 tailscaled longrun service
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/tailscaled/type`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/tailscaled/run`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/tailscaled/finish`
@@ -787,6 +821,7 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/init-tailscale/ && git commit -m
 **Step 1: Write service definition**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/tailscaled/type`:
+
 ```
 longrun
 ```
@@ -796,6 +831,7 @@ Create empty `headscale/rootfs/etc/s6-overlay/s6-rc.d/tailscaled/dependencies.d/
 **Step 2: Write run script**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/tailscaled/run`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -857,6 +893,7 @@ wait ${TAILSCALED_PID}
 **Step 3: Write finish script**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/tailscaled/finish`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -897,6 +934,7 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/tailscaled/ && git commit -m "fe
 ### Task 11: Nginx config and templates
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/nginx/nginx.conf`
 - Create: `headscale/rootfs/etc/nginx/templates/ingress.gtpl`
 - Create: `headscale/rootfs/etc/nginx/templates/direct.gtpl`
@@ -905,6 +943,7 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/tailscaled/ && git commit -m "fe
 **Step 1: Write nginx.conf**
 
 Create `headscale/rootfs/etc/nginx/nginx.conf`:
+
 ```nginx
 worker_processes auto;
 pid /var/run/nginx.pid;
@@ -935,6 +974,7 @@ http {
 **Step 2: Write upstream template**
 
 Create `headscale/rootfs/etc/nginx/templates/upstream.gtpl`:
+
 ```
 upstream headplane {
     server 127.0.0.1:{{ .port }};
@@ -944,6 +984,7 @@ upstream headplane {
 **Step 3: Write ingress template**
 
 Create `headscale/rootfs/etc/nginx/templates/ingress.gtpl`:
+
 ```
 server {
     listen {{ .interface }}:{{ .port }} default_server;
@@ -967,6 +1008,7 @@ server {
 **Step 4: Write direct access template**
 
 Create `headscale/rootfs/etc/nginx/templates/direct.gtpl`:
+
 ```
 server {
     listen {{ .port }};
@@ -1011,6 +1053,7 @@ git add headscale/rootfs/etc/nginx/ && git commit -m "feat: add nginx config and
 ### Task 12: s6 init-nginx and nginx services
 
 **Files:**
+
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-nginx/type`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-nginx/up`
 - Create: `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-nginx/run`
@@ -1024,11 +1067,13 @@ git add headscale/rootfs/etc/nginx/ && git commit -m "feat: add nginx config and
 **Step 1: Write init-nginx oneshot**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-nginx/type`:
+
 ```
 oneshot
 ```
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-nginx/up`:
+
 ```
 /etc/s6-overlay/s6-rc.d/init-nginx/run
 ```
@@ -1036,6 +1081,7 @@ Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-nginx/up`:
 Create empty `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-nginx/dependencies.d/headscale`
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/init-nginx/run`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -1080,15 +1126,18 @@ bashio::log.info "Nginx configuration complete."
 **Step 2: Write nginx longrun**
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/nginx/type`:
+
 ```
 longrun
 ```
 
 Create empty files:
+
 - `headscale/rootfs/etc/s6-overlay/s6-rc.d/nginx/dependencies.d/init-nginx`
 - `headscale/rootfs/etc/s6-overlay/s6-rc.d/nginx/dependencies.d/headplane`
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/nginx/run`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -1105,6 +1154,7 @@ exec nginx -c /etc/nginx/nginx.conf
 ```
 
 Create `headscale/rootfs/etc/s6-overlay/s6-rc.d/nginx/finish`:
+
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
@@ -1145,11 +1195,13 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/init-nginx/ headscale/rootfs/etc
 ### Task 13: s6 service bundle (user/contents.d)
 
 **Files:**
+
 - Create: empty marker files in `headscale/rootfs/etc/s6-overlay/s6-rc.d/user/contents.d/`
 
 **Step 1: Create bundle marker files**
 
 Create one empty file for each service in `headscale/rootfs/etc/s6-overlay/s6-rc.d/user/contents.d/`:
+
 - `init-headscale`
 - `headscale`
 - `init-headplane`
@@ -1177,11 +1229,13 @@ git add headscale/rootfs/etc/s6-overlay/s6-rc.d/user/ && git commit -m "feat: ad
 ### Task 14: Finalize Dockerfile with chmod and mkdir
 
 **Files:**
+
 - Modify: `headscale/Dockerfile`
 
 **Step 1: Add post-COPY commands**
 
 After the `COPY rootfs /` line in the Dockerfile, add:
+
 ```dockerfile
 # Create required directories
 RUN mkdir -p /etc/nginx/servers /var/run/nginx /var/run/tailscale /data
@@ -1234,6 +1288,7 @@ git add -A && git commit -m "fix: resolve Docker build issues"
 ### Task 16: Write DOCS.md
 
 **Files:**
+
 - Create: `headscale/DOCS.md`
 
 **Step 1: Write user documentation**
@@ -1278,6 +1333,7 @@ docker logs -f headscale-test
 ```
 
 Expected log lines (in order):
+
 1. "Configuring Headscale..."
 2. Config validation errors (server_url required) — this is expected without real options
 

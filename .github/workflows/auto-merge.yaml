@@ -1,0 +1,38 @@
+---
+name: Dependabot auto-merge
+
+# yamllint disable-line rule:truthy
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    # github.actor reflects the last actor to touch the PR ref, not
+    # necessarily who opened it, and is spoofable; the PR's own author
+    # field plus a same-repo check are the trustworthy signals (see
+    # https://docs.zizmor.sh/audits/#bot-conditions).
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.repository == github.event.pull_request.head.repo.full_name
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch metadata
+        id: meta
+        uses: dependabot/fetch-metadata@08eff52bf64351f401fb50d4972fa95b9f2c2d1b # v2.4.0
+      - name: Enable auto-merge (patch/minor, except headscale minors)
+        if: >-
+          steps.meta.outputs.update-type != 'version-update:semver-major' &&
+          !(contains(steps.meta.outputs.dependency-names, 'juanfont/headscale') &&
+            steps.meta.outputs.update-type == 'version-update:semver-minor')
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          # GITHUB_TOKEN merges do not trigger other workflows (GitHub
+          # suppresses workflow runs triggered by the default token), which
+          # would silently prevent release.yaml from firing on merge to
+          # main. Use the PAT-backed RELEASE_TOKEN instead so the merge
+          # commit lands as a normal push and the release workflow runs.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}

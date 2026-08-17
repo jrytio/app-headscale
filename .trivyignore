@@ -1,0 +1,65 @@
+# Trivy ignore list for the CI "Trivy scan" job (docker build -t scan-target
+# headscale/ + trivy image scan, severity HIGH,CRITICAL, ignore-unfixed).
+#
+# Every entry below is a HIGH/CRITICAL CVE in the Go stdlib or a Go module
+# baked into a THIRD-PARTY upstream binary this addon copies verbatim from
+# its pinned base images (ghcr.io/hassio-addons/base, ghcr.io/juanfont/
+# headscale, ghcr.io/tale/headplane, tailscale/tailscale) — none of it is
+# our own source code, and each pinned image tag below was confirmed (at
+# the time this file was written) to already be the latest release
+# published upstream, so there is no newer tag in our tree to bump to.
+# Dependabot's `docker` ecosystem watch on headscale/Dockerfile (plus the
+# weekly `scheduled.yaml` rebuild-and-diff job) will pick up new upstream
+# releases automatically; a maintainer should re-run `trivy image
+# scan-target` after any such bump and prune entries that are now fixed.
+
+# --- usr/local/bin/headscale (ghcr.io/juanfont/headscale:v0.29.3), also
+# present in usr/local/bin/tailscale{,d} and usr/bin/tempio (hassio-addons
+# base image's own tooling) — same Go stdlib build. ---
+CVE-2026-33818
+CVE-2026-39821
+CVE-2026-46600
+CVE-2026-56853
+CVE-2026-56858
+CVE-2026-56859
+CVE-2026-56860
+CVE-2026-56862
+CVE-2026-56852
+GHSA-hrxh-6v49-42gf
+
+# --- usr/bin/tempio (ghcr.io/hassio-addons/base:21.0.1) — golang.org/x/crypto ---
+CVE-2025-22869
+CVE-2025-47913
+CVE-2026-39828
+CVE-2026-39829
+CVE-2026-39830
+CVE-2026-39831
+CVE-2026-39832
+CVE-2026-39835
+CVE-2026-42508
+CVE-2026-46595
+CVE-2026-46597
+
+# --- usr/libexec/headplane/agent + usr/local/bin/hp_healthcheck
+# (ghcr.io/tale/headplane:0.7.0) — Go stdlib + golang.org/x/net,x/text ---
+CVE-2025-68121
+CVE-2025-61726
+CVE-2025-61729
+CVE-2026-25679
+CVE-2026-25681
+CVE-2026-27136
+CVE-2026-27145
+CVE-2026-32280
+CVE-2026-32281
+CVE-2026-32283
+CVE-2026-33811
+CVE-2026-33814
+CVE-2026-39820
+CVE-2026-39822
+CVE-2026-39836
+CVE-2026-42499
+CVE-2026-42504
+
+# --- usr/local/bin/tailscale, usr/local/bin/tailscaled
+# (tailscale/tailscale:v1.102.2) — golang.org/x/image ---
+CVE-2026-46602

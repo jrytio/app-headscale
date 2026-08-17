@@ -1,0 +1,33 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# Mints a single-use tagged join key for the HA proxy node when it has not
+# yet successfully joined the tailnet (see the .joined marker written by
+# ts-ha-proxy/run on a successful `tailscale up`).
+readonly STATE_DIR="/data/tailscale/ha-proxy"
+readonly KEY_FILE="/tmp/ha-proxy-join-key"
+
+hs() { s6-setuidgid headscale /usr/local/bin/headscale --config /data/headscale/config.yaml "$@"; }
+
+mkdir -p "${STATE_DIR}" /var/run/tailscale
+chown -R tailscale:tailscale "${STATE_DIR}" /var/run/tailscale
+
+if [ ! -f "${STATE_DIR}/.joined" ]; then
+    addon_uid=$(hs users list -o json 2>/dev/null | jq -r '.[] | select(.name=="addon") | .id') || true
+    if bashio::var.has_value "${addon_uid}"; then
+        # Default expiry 1h, single-use, tagged — never logged, never persisted.
+        join_key=$(hs preauthkeys create --user "${addon_uid}" --tags tag:homeassistant 2>/dev/null) || true
+        if bashio::var.has_value "${join_key}"; then
+            (umask 077 && printf '%s' "${join_key}" > "${KEY_FILE}")
+            # ts-ha-proxy/run passes this to `tailscale up` as
+            # --authkey file:${KEY_FILE}, which is opened by the tailscale
+            # CLI running as the unprivileged tailscale user — chown it
+            # (this script runs as root) so that read can succeed under
+            # both plain Unix permissions and AppArmor's owner-scoped
+            # /tmp/** rule.
+            chown tailscale:tailscale "${KEY_FILE}"
+            bashio::log.info "HA proxy join key minted (single-use, 1h)."
+        else
+            bashio::log.warning "Could not mint HA proxy join key."
+        fi
+    fi
+fi

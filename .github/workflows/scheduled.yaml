@@ -1,0 +1,78 @@
+---
+name: Scheduled
+
+# yamllint disable-line rule:truthy
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  refresh-check:
+    runs-on: ubuntu-latest
+    # actions/checkout below is given the RELEASE_TOKEN explicitly (needed so
+    # the resulting push triggers release.yaml — the default GITHUB_TOKEN
+    # cannot do that), so the ambient token only needs read scopes here.
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Rebuild without cache and diff package versions
+        id: diff
+        run: |
+          docker build --no-cache -t fresh headscale/
+          ver=$(yq e '.version' headscale/config.yaml)
+          docker pull "ghcr.io/${{ github.repository_owner }}/amd64-addon-headscale:${ver}" || { echo "changed=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          docker run --rm --entrypoint sh fresh -c 'apk list --installed 2>/dev/null | sort' > /tmp/fresh.txt
+          docker run --rm --entrypoint sh "ghcr.io/${{ github.repository_owner }}/amd64-addon-headscale:${ver}" -c 'apk list --installed 2>/dev/null | sort' > /tmp/released.txt
+          if diff -q /tmp/fresh.txt /tmp/released.txt >/dev/null; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            diff /tmp/released.txt /tmp/fresh.txt || true
+          fi
+      - name: Trigger release for base-layer updates
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: rebuild for base-layer package updates"
+          git push
+
+  trivy-published:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Scan latest published image
+        id: scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        continue-on-error: true
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/amd64-addon-headscale:latest
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Open issue when CVEs found
+        if: steps.scan.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue list --label security-scan --state open | grep -q . || \
+          gh issue create --title "Trivy: HIGH/CRITICAL CVEs in published image" \
+            --label security-scan \
+            --body "The weekly Trivy scan found fixable HIGH/CRITICAL CVEs in the latest published image. Check the workflow run for details. A Dependabot PR or refresh rebuild should resolve it."
