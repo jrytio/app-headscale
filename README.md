@@ -46,6 +46,13 @@ fork or a new maintainer needs to configure them by hand:
   to) so the automated `release:` version-bump commit and tag push in
   `release.yaml` aren't themselves blocked by the protection rule.
 
+  `Supervisor e2e` runs `headscale/apparmor.txt` under **real, enforcing**
+  AppArmor on the runner's kernel (unlike a local Docker Desktop dev loop,
+  whose kernel has no AppArmor LSM at all and so silently passes regardless
+  of the profile's correctness) — keep it required so a profile change that
+  denies something the addon actually needs (confirmed via kernel AVC/`dmesg`
+  denials, not guesswork) is caught before merge, not after a user installs.
+
 - **Dependency graph / Dependabot alerts** — Settings → Advanced Security (or
   `PUT /repos/<owner>/app-headscale/vulnerability-alerts` via the API) should
   be enabled. `ci.yaml` intentionally does not run

@@ -32,7 +32,13 @@ profile headscale flags=(attach_disconnected,mediate_deleted) {
 
   network tcp,
   network udp,
-  network unix,
+  # Bare "network unix," is not enough on this runner's kernel/parser: the
+  # AVC denial it produces is "failed protocol match" on family=unix
+  # sock_type=stream — the type qualifier is required. Confirmed against the
+  # live hassio-supervisor profile (version.home-assistant.io/apparmor.txt,
+  # loaded and working in this exact devcontainer per the supervisor log),
+  # which uses the identical "network unix stream," form.
+  network unix stream,
   deny network raw,
 
   file,
