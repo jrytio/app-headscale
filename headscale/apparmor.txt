@@ -22,6 +22,14 @@ profile headscale flags=(attach_disconnected,mediate_deleted) {
   /run/{s6,s6-rc*,service}/** ix,
   /package/** ix,
   /command/** ix,
+  # s6-rc's internal oneshot dispatcher (s6rc-oneshot-runner) binds a control
+  # unix socket under a randomized /run/s6-rc:<id>/servicedirs/** path via
+  # s6-ipcserver-socketbinder — every init-* oneshot depends on it. This is
+  # the same rule the upstream hassio-supervisor profile and the official
+  # s6-overlay-v3 migration guidance grant for /run (see
+  # developers.home-assistant.io s6-overlay-base-images blog post); our own
+  # broader /** mrwkl below is not a reliable substitute for it in practice.
+  /run/{,**} rwk,
 
   # Service binaries
   /usr/local/bin/headscale cx -> headscale,
@@ -38,6 +46,7 @@ profile headscale flags=(attach_disconnected,mediate_deleted) {
     #include <abstractions/base>
     network tcp,
     network udp,
+    network unix,
     /usr/local/bin/headscale rm,
     /data/headscale/** rwk,
     /data/headscale/ rw,

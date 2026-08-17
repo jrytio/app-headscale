@@ -5,7 +5,6 @@ slug: headscale
 description: Self-hosted Tailscale control server with web UI
 url: https://github.com/jrytio/app-headscale
 ingress: true
-ingress_port: 8099
 panel_icon: mdi:vpn
 panel_title: Headscale
 startup: services
